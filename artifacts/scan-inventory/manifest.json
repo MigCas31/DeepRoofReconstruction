@@ -1,0 +1,20 @@
+{
+  "version": "2026-04-03",
+  "description": "Scan inventory package for human + LLM consumption",
+  "rowCount": 681,
+  "sourceFileCounts": {
+    "data": 229,
+    "roomplan": 2443,
+    "mergedFloor": 383,
+    "ceiling": 2443,
+    "ceilingMerged": 2312,
+    "ceilingMetadata": 2443
+  },
+  "artifacts": {
+    "fieldReferenceJson": "artifacts/scan-inventory/field-reference.json",
+    "fieldReferenceJsonl": "artifacts/scan-inventory/field-reference.jsonl",
+    "fieldCatalogJson": "artifacts/scan-inventory/field-catalog.json",
+    "schema": "schemas/scan-inventory-field-reference.schema.json",
+    "calorUsageMatrix": "docs/scan-inventory/reference/calor-usage-matrix.md"
+  }
+}
