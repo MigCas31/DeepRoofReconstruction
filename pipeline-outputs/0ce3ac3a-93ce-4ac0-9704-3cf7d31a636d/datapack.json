@@ -6313,5 +6313,19 @@
   "pointcloud_gcs": {
     "parcel_clipped": "gs://integrations-building-data/pointclouds/0ce3ac3a-93ce-4ac0-9704-3cf7d31a636d/PUNKTSKY_parcel_clipped.laz",
     "crop100m": "gs://integrations-building-data/pointclouds/0ce3ac3a-93ce-4ac0-9704-3cf7d31a636d/PUNKTSKY_crop100m.laz"
+  },
+  "google_solar_gcs": {
+    "rgb": "gs://integrations-building-data/google-solar/0ce3ac3a-93ce-4ac0-9704-3cf7d31a636d/rgb.tif",
+    "dsm": "gs://integrations-building-data/google-solar/0ce3ac3a-93ce-4ac0-9704-3cf7d31a636d/dsm.tif",
+    "mask": "gs://integrations-building-data/google-solar/0ce3ac3a-93ce-4ac0-9704-3cf7d31a636d/mask.tif",
+    "annual_flux": "gs://integrations-building-data/google-solar/0ce3ac3a-93ce-4ac0-9704-3cf7d31a636d/annual_flux.tif",
+    "monthly_flux": "gs://integrations-building-data/google-solar/0ce3ac3a-93ce-4ac0-9704-3cf7d31a636d/monthly_flux.tif",
+    "masked_to_parcel": {
+      "rgb": "gs://integrations-building-data/google-solar/0ce3ac3a-93ce-4ac0-9704-3cf7d31a636d/masked_to_parcel/rgb_parcel_masked.tif",
+      "dsm": "gs://integrations-building-data/google-solar/0ce3ac3a-93ce-4ac0-9704-3cf7d31a636d/masked_to_parcel/dsm_parcel_masked.tif",
+      "mask": "gs://integrations-building-data/google-solar/0ce3ac3a-93ce-4ac0-9704-3cf7d31a636d/masked_to_parcel/mask_parcel_masked.tif",
+      "annual_flux": "gs://integrations-building-data/google-solar/0ce3ac3a-93ce-4ac0-9704-3cf7d31a636d/masked_to_parcel/annual_flux_parcel_masked.tif",
+      "monthly_flux": "gs://integrations-building-data/google-solar/0ce3ac3a-93ce-4ac0-9704-3cf7d31a636d/masked_to_parcel/monthly_flux_parcel_masked.tif"
+    }
   }
 }
