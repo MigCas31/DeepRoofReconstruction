@@ -1,0 +1,7185 @@
+{
+  "version": 2,
+  "reconciliation": {
+    "timestamp": "2026-04-09T07:48:12.573655+00:00",
+    "classification": "RED",
+    "wall_count_merged": 48,
+    "wall_count_raw": 73,
+    "wall_reduction_pct": 34.2,
+    "mean_width_delta_cm": 8.8,
+    "mean_height_delta_cm": 11.4,
+    "floor_gap_measurements": 16,
+    "floor_gap_median_cm": 11.3,
+    "scan_session_count": 1,
+    "median_wall_displacement_m": 7.69,
+    "max_wall_displacement_m": 9.8,
+    "story_changes": 0,
+    "story_change_ratio": 0.0,
+    "walls_with_large_displacement": [
+      "39B2531E-0A35-4ECE-8C6E-3E34058FB760",
+      "C6A8A87F-7DDF-45ED-9048-FCEE8C426A99",
+      "4C1970CA-6B68-4091-A59E-779611461C21",
+      "BA3C00AE-88C2-4DC1-B8A1-2BD0229621F1",
+      "9DE6D4C5-0D95-4A5C-B3BB-53B011942A1F",
+      "F973B0B8-4782-4E09-9A07-0277F2AC17C9",
+      "5A97C4E1-5A3A-43E6-BD14-504BFEFD9471",
+      "1E974BFC-D6DB-445A-BC10-9ACC3ACB2ABE",
+      "A8297807-9F35-4EEB-96CF-073598F2B034",
+      "3F52DC50-F51E-44EE-A8C9-38B1FE31A687",
+      "F742CCC3-5C1C-46FB-9B31-27EA89CE4AC8",
+      "215B4F7D-D8F6-4E6B-963E-8CA9354F8FBF",
+      "06834772-94C1-47AC-BC6B-09CF065266A3",
+      "97F05232-F50D-4691-85E9-5D4B784D0F94",
+      "FDE9F711-DE9E-4B46-861B-91741E25A8A2",
+      "8990A07E-B394-4470-9833-B668FF71E92D",
+      "D869BB5E-BABE-4E17-A0B2-E34F7E610710",
+      "06C9A0E0-6675-49DF-8280-872173F9BBEB",
+      "6C79FB8D-6574-44B9-A78B-1AB430AFF97A",
+      "7D645634-F2A0-4502-B023-406501F0A25B",
+      "6576E002-FF6E-4153-90A7-10218575239F",
+      "D714D297-67B4-4AE8-BB3E-85757835F3B1",
+      "63396280-CAA1-4700-81DD-3B369EF5E9A1",
+      "2E73E56D-EA1B-43A6-9294-6A1FD0AE0CF6",
+      "08A1AF03-5F65-4287-AACD-0BCF517E0E88",
+      "FCF1C311-A2C4-4C28-8B70-0EED4B25AF9F",
+      "82B35F7C-D2A6-4597-9B52-A4ABFD5CEF84",
+      "772B90CF-2EE8-43A5-BEDC-7722864ED994",
+      "EDCE7973-9FCE-4AD3-8ADE-4E57825B9425",
+      "94116C73-0228-47D5-8214-83BF3666ACEA",
+      "6B4795D6-5B39-490F-B1A7-DC48BD1883D5",
+      "B22FD013-3566-4060-804B-A58476896214",
+      "ED0A264B-1D86-4E46-A56F-E7AEAC1226C3",
+      "7883690A-B9A3-4154-B7C7-FDBA9D6CD39E",
+      "2150C3FD-0178-4110-BBCC-6596A1BD8B10",
+      "7E7A757D-1960-4AA8-9C77-FB7A6D16D0BF",
+      "B21B6C44-325F-42D9-9F4A-FFC050109C4A",
+      "3FA8B826-DC9D-4E23-B713-E195C0B6215F"
+    ],
+    "flags": [
+      "RED: max_height_delta > 50cm"
+    ]
+  },
+  "walls": [
+    {
+      "identifier": "B3173CE9-5924-42F5-95A9-DB49B326AB6D",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        2.8134978,
+        2.3197317,
+        0.1198406
+      ],
+      "transform": [
+        -0.5312529,
+        0.0,
+        -0.8472132,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.8472132,
+        0.0,
+        -0.5312529,
+        0.0,
+        10.640289,
+        -0.5186279,
+        4.0184636,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "left": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "right": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "126D7B00-2289-4186-941E-BC3029D3FF28",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        16.083231,
+        2.3197317,
+        0
+      ],
+      "transform": [
+        -0.8472132,
+        0.0,
+        0.53125286,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.53125286,
+        0.0,
+        -0.8472132,
+        0.0,
+        6.116906,
+        -0.5186279,
+        8.515336,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "right": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "bottom": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "A27A8A4D-71C3-4515-A8B5-22B04C93B3E3",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        3.2779977,
+        2.3197317,
+        0.1198406
+      ],
+      "transform": [
+        -0.531253,
+        0.0,
+        -0.8472131,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.8472131,
+        0.0,
+        -0.531253,
+        0.0,
+        7.9108152,
+        -0.5186279,
+        2.1349869,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "top": {}
+        },
+        {
+          "right": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "left": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "6EBE2946-E331-4CD9-A063-5B3FF12E46EA",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        3.4812324,
+        2.3197317,
+        0
+      ],
+      "transform": [
+        0.5312528,
+        0.0,
+        0.84721315,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.84721315,
+        0.0,
+        0.5312528,
+        0.0,
+        6.115385,
+        -0.5186279,
+        -0.72826755,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "bottom": {}
+        },
+        {
+          "right": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "left": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "E829D5E2-3F41-47B5-A891-CF929ED177D1",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        5.13453,
+        2.3197317,
+        0.25875035
+      ],
+      "transform": [
+        0.84721327,
+        0.0,
+        -0.53125286,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.53125286,
+        0.0,
+        0.84721327,
+        0.0,
+        7.717929,
+        -0.5186279,
+        4.1905146,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "top": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "right": {}
+        },
+        {
+          "left": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "AA0FE727-4AFF-4AA8-A8FF-F5CB22D9119A",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        2.813498,
+        2.3197317,
+        0.1198406
+      ],
+      "transform": [
+        -0.53125286,
+        0.0,
+        -0.84721327,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.84721327,
+        0.0,
+        -0.53125286,
+        0.0,
+        8.895511,
+        -0.5186279,
+        5.112543,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "left": {}
+        },
+        {
+          "right": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "bottom": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "39AFD217-417C-4522-B27A-C932A2B16B5D",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        12.951019,
+        2.3197317,
+        0.3157816
+      ],
+      "transform": [
+        0.8472132,
+        0.0,
+        -0.5312529,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.5312529,
+        0.0,
+        0.8472132,
+        0.0,
+        1.5539556,
+        -0.5186279,
+        4.186539,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "right": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "bottom": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "7D2EF232-B01A-4AF6-A140-A3FD2B0BED00",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        6.0914955,
+        2.3197317,
+        0.1198406
+      ],
+      "transform": [
+        0.53125274,
+        0.0,
+        0.8472133,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.8472133,
+        0.0,
+        0.5312527,
+        0.0,
+        5.419524,
+        -0.5186279,
+        5.357616,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "right": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "bottom": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "524BD412-12CF-464C-AA1F-336687AE12CD",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        3.4812326,
+        2.3197317,
+        0.1198406
+      ],
+      "transform": [
+        0.5312531,
+        0.0,
+        0.84721315,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.8472131,
+        0.0,
+        0.53125304,
+        0.0,
+        3.2430372,
+        -0.5186279,
+        1.0728647,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "left": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "right": {}
+        },
+        {
+          "bottom": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "D398C11C-90FF-4E5C-BA45-B9F09CBD92E3",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        3.3903487,
+        2.3197317,
+        0.23029168
+      ],
+      "transform": [
+        -0.8472132,
+        0.0,
+        0.53125286,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.53125286,
+        0.0,
+        -0.8472132,
+        0.0,
+        3.7545037,
+        -0.5186279,
+        -1.3023745,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "right": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "top": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "813D9761-D605-40B7-8AF6-441FE20A27AE",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        2.410589,
+        2.3197317,
+        0.1198406
+      ],
+      "transform": [
+        0.53125274,
+        0.0,
+        0.84721327,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.84721327,
+        0.0,
+        0.53125274,
+        0.0,
+        0.52973175,
+        -0.5186279,
+        6.2514453,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "bottom": {}
+        },
+        {
+          "right": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "left": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "F1658427-651D-4AF1-85F7-5D0B3858CD9A",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        4.6175485,
+        2.3197317,
+        0.22398536
+      ],
+      "transform": [
+        -0.8472132,
+        0.0,
+        0.5312528,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.5312528,
+        0.0,
+        -0.8472132,
+        0.0,
+        3.126071,
+        -0.5186279,
+        6.0460443,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "right": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "top": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "04D45407-C43D-484F-B3F6-0CD54ABD9D6E",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        3.6809063,
+        2.3197317,
+        0.1198406
+      ],
+      "transform": [
+        0.53125286,
+        0.0,
+        0.84721327,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.84721327,
+        0.0,
+        0.53125286,
+        0.0,
+        3.5103369,
+        -0.5186279,
+        7.977448,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "top": {}
+        },
+        {
+          "right": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "bottom": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "39B2531E-0A35-4ECE-8C6E-3E34058FB760",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        3.1998105,
+        2.1985714,
+        0
+      ],
+      "transform": [
+        0.8475462,
+        0.0,
+        -0.53072137,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.53072137,
+        0.0,
+        0.84754616,
+        0.0,
+        8.5306425,
+        -0.5186279,
+        0.059746206,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "bottom": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "right": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "1F8574AC-9659-496C-AAEE-EE2D3344F3F6",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        3.1103685,
+        2.0540478,
+        0
+      ],
+      "transform": [
+        0.53072155,
+        0.0,
+        0.84754616,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.84754616,
+        0.0,
+        0.5307215,
+        0.0,
+        10.703628,
+        -0.5186279,
+        0.47154507,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "bottom": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "right": {}
+        },
+        {
+          "left": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "34695F7C-466E-41C2-BD4A-E6BB7360DF0D",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        1.541517,
+        2.0540478,
+        0
+      ],
+      "transform": [
+        0.5307216,
+        0.0,
+        0.8475461,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.8475461,
+        0.0,
+        0.53072155,
+        0.0,
+        12.510088,
+        -0.5186279,
+        3.5737734,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "bottom": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "right": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "9DE6D4C5-0D95-4A5C-B3BB-53B011942A1F",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        1.8808063,
+        2.1985714,
+        0
+      ],
+      "transform": [
+        -0.8199333,
+        0.0,
+        0.5724589,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.5724589,
+        0.0,
+        -0.8199333,
+        0.0,
+        10.704609,
+        -0.5186279,
+        2.3007486,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "right": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "top": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "F742CCC3-5C1C-46FB-9B31-27EA89CE4AC8",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        0.55059004,
+        1.9979999,
+        0
+      ],
+      "transform": [
+        -0.53072244,
+        0.0,
+        -0.84754544,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.8475455,
+        0.0,
+        -0.53072244,
+        0.0,
+        10.253416,
+        -0.69793236,
+        5.57407,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "left": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "right": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "978FE538-E078-4410-A4E2-912290A7041D",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        7.5727735,
+        2.3655925,
+        0
+      ],
+      "transform": [
+        -0.5307214,
+        0.0,
+        -0.8475462,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.8475462,
+        0.0,
+        -0.5307214,
+        0.0,
+        -0.36798,
+        -0.5186279,
+        0.7388515,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "right": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "top": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "6070AF34-A4A9-41A2-B99B-5D571419FDFE",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        6.2563915,
+        2.3655925,
+        0
+      ],
+      "transform": [
+        0.8475461,
+        0.0,
+        -0.5307217,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.5307218,
+        0.0,
+        0.84754604,
+        0.0,
+        0.2662344,
+        -0.5186279,
+        -4.1443768,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "bottom": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "right": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "37D026D7-CA15-43DB-B8F5-FBB3720D2A0B",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        4.2042274,
+        2.3655925,
+        0
+      ],
+      "transform": [
+        0.5307213,
+        0.0,
+        0.8475463,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.8475462,
+        0.0,
+        0.5307213,
+        0.0,
+        4.048794,
+        -0.5186279,
+        -3.9997907,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "top": {}
+        },
+        {
+          "right": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "left": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "3CD3323A-AD9B-47D2-BE53-EF061E76179C",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        2.8789349,
+        2.3655925,
+        0
+      ],
+      "transform": [
+        -0.8475461,
+        0.0,
+        0.5307217,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.5307218,
+        0.0,
+        -0.84754604,
+        0.0,
+        2.8737125,
+        -0.5186279,
+        3.1950397,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "left": {}
+        },
+        {
+          "right": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "top": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    },
+    {
+      "identifier": "969F57AE-C2E6-4775-B982-733BF2B62326",
+      "category": {
+        "wall": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        5.869735,
+        2.3655925,
+        0
+      ],
+      "transform": [
+        -0.5307217,
+        0.0,
+        -0.84754604,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.84754604,
+        0.0,
+        -0.53072166,
+        0.0,
+        -2.3166094,
+        -0.5186279,
+        10.203064,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "bottom": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "right": {}
+        }
+      ],
+      "parentIdentifier": null,
+      "curve": null
+    }
+  ],
+  "doors": [
+    {
+      "identifier": "C170312E-18BE-4258-BE2F-BC3CCE0731A9",
+      "category": {
+        "door": {
+          "isOpen": false
+        }
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        0.9566924,
+        1.8754325,
+        0
+      ],
+      "transform": [
+        0.8475463,
+        0.0,
+        -0.53072137,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.53072137,
+        0.0,
+        0.8475463,
+        0.0,
+        8.64115,
+        -0.7292201,
+        -0.009452343,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "right": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "left": {}
+        }
+      ],
+      "parentIdentifier": "39B2531E-0A35-4ECE-8C6E-3E34058FB760",
+      "curve": null
+    },
+    {
+      "identifier": "10049FF2-414D-4C4C-89BB-A317F1F3F760",
+      "category": {
+        "door": {
+          "isOpen": false
+        }
+      },
+      "confidence": {
+        "medium": {}
+      },
+      "dimensions": [
+        1.2565682,
+        2.2399144,
+        0.3157816
+      ],
+      "transform": [
+        0.8475459,
+        0.0,
+        -0.53072184,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.5307219,
+        0.0,
+        0.8475459,
+        0.0,
+        0.5692177,
+        -0.5469791,
+        4.8031344,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "right": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "left": {}
+        }
+      ],
+      "parentIdentifier": "B22FD013-3566-4060-804B-A58476896214",
+      "curve": null
+    },
+    {
+      "identifier": "0E1CE154-BED7-48BD-B6C1-A8B62964E93C",
+      "category": {
+        "door": {
+          "isOpen": false
+        }
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        1.2913355,
+        1.9502497,
+        0
+      ],
+      "transform": [
+        0.5307215,
+        0.0,
+        0.8475461,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.84754616,
+        0.0,
+        0.5307214,
+        0.0,
+        4.5821,
+        -0.6918115,
+        -3.1481166,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "top": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "right": {}
+        }
+      ],
+      "parentIdentifier": "37D026D7-CA15-43DB-B8F5-FBB3720D2A0B",
+      "curve": null
+    },
+    {
+      "identifier": "16A4DFA1-B236-42CD-B967-BD1A41D8709E",
+      "category": {
+        "door": {
+          "isOpen": false
+        }
+      },
+      "confidence": {
+        "medium": {}
+      },
+      "dimensions": [
+        0.88230515,
+        2.169735,
+        0
+      ],
+      "transform": [
+        -0.5307219,
+        0.0,
+        -0.84754586,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.8475459,
+        0.0,
+        -0.5307219,
+        0.0,
+        -1.2364798,
+        -0.5820688,
+        11.927999,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "left": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "right": {}
+        },
+        {
+          "bottom": {}
+        }
+      ],
+      "parentIdentifier": "969F57AE-C2E6-4775-B982-733BF2B62326",
+      "curve": null
+    },
+    {
+      "identifier": "CF35E4CD-0F8C-4120-A112-055BD8DA2BA3",
+      "category": {
+        "door": {
+          "isOpen": true
+        }
+      },
+      "confidence": {
+        "medium": {}
+      },
+      "dimensions": [
+        0.67609334,
+        1.9796841,
+        0.1198406
+      ],
+      "transform": [
+        0.53125304,
+        0.0,
+        0.84721303,
+        0.0,
+        0.0,
+        0.99999994,
+        0.0,
+        0.0,
+        -0.84721303,
+        0.0,
+        0.531253,
+        0.0,
+        7.769717,
+        -0.6886516,
+        1.9099709,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "left": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "right": {}
+        }
+      ],
+      "parentIdentifier": "A27A8A4D-71C3-4515-A8B5-22B04C93B3E3",
+      "curve": null
+    },
+    {
+      "identifier": "37AC50D2-BE21-4116-BDE1-48D95FF294DE",
+      "category": {
+        "door": {
+          "isOpen": true
+        }
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        0.67892385,
+        1.8568412,
+        0.25875035
+      ],
+      "transform": [
+        0.84721327,
+        0.0,
+        -0.53125286,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.53125286,
+        0.0,
+        0.84721327,
+        0.0,
+        9.382851,
+        -0.7500731,
+        3.1465101,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "left": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "right": {}
+        }
+      ],
+      "parentIdentifier": "E829D5E2-3F41-47B5-A891-CF929ED177D1",
+      "curve": null
+    },
+    {
+      "identifier": "89A17934-34C6-4E30-9D2A-D585B9B5F097",
+      "category": {
+        "door": {
+          "isOpen": true
+        }
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        0.76404387,
+        2.0072992,
+        0.3157816
+      ],
+      "transform": [
+        0.84721315,
+        0.0,
+        -0.5312529,
+        0.0,
+        0.0,
+        0.99999994,
+        0.0,
+        0.0,
+        0.5312529,
+        0.0,
+        0.84721315,
+        0.0,
+        6.499112,
+        -0.6748441,
+        1.0856326,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "left": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "right": {}
+        },
+        {
+          "bottom": {}
+        }
+      ],
+      "parentIdentifier": "39AFD217-417C-4522-B27A-C932A2B16B5D",
+      "curve": null
+    },
+    {
+      "identifier": "38D66589-521C-445A-A571-44F946A8C466",
+      "category": {
+        "door": {
+          "isOpen": true
+        }
+      },
+      "confidence": {
+        "medium": {}
+      },
+      "dimensions": [
+        0.81167924,
+        2.118378,
+        0.25875035
+      ],
+      "transform": [
+        0.84721327,
+        0.0,
+        -0.5312529,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.5312529,
+        0.0,
+        0.84721327,
+        0.0,
+        6.1150246,
+        -0.6193047,
+        5.1956306,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "right": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "top": {}
+        }
+      ],
+      "parentIdentifier": "E829D5E2-3F41-47B5-A891-CF929ED177D1",
+      "curve": null
+    },
+    {
+      "identifier": "5D2FA558-FBF8-4E8A-8A22-E1DDE7A3F163",
+      "category": {
+        "door": {
+          "isOpen": true
+        }
+      },
+      "confidence": {
+        "medium": {}
+      },
+      "dimensions": [
+        0.70379627,
+        2.170539,
+        0.1198406
+      ],
+      "transform": [
+        0.53125256,
+        0.0,
+        0.84721345,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.84721345,
+        0.0,
+        0.53125256,
+        0.0,
+        5.357119,
+        -0.5932243,
+        5.2580953,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "right": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "bottom": {}
+        }
+      ],
+      "parentIdentifier": "7D2EF232-B01A-4AF6-A140-A3FD2B0BED00",
+      "curve": null
+    }
+  ],
+  "windows": [
+    {
+      "identifier": "403F4B11-84F2-40A4-B02A-B21EEBFA37A5",
+      "category": {
+        "window": {}
+      },
+      "confidence": {
+        "medium": {}
+      },
+      "dimensions": [
+        0.4140896,
+        0.92092955,
+        0
+      ],
+      "transform": [
+        0.84754616,
+        0.0,
+        -0.5307214,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.5307215,
+        0.0,
+        0.8475461,
+        0.0,
+        7.9268327,
+        -0.2404113,
+        0.4378433,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "bottom": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "right": {}
+        }
+      ],
+      "parentIdentifier": "39B2531E-0A35-4ECE-8C6E-3E34058FB760",
+      "curve": null
+    },
+    {
+      "identifier": "21B992E3-06B1-4262-BEB6-951B9822CAEC",
+      "category": {
+        "window": {}
+      },
+      "confidence": {
+        "medium": {}
+      },
+      "dimensions": [
+        0.83989036,
+        0.8885652,
+        0
+      ],
+      "transform": [
+        -0.8475462,
+        0.0,
+        0.5307214,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.5307214,
+        0.0,
+        -0.8475462,
+        0.0,
+        10.83333,
+        -0.36104333,
+        5.5616264,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "right": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "left": {}
+        }
+      ],
+      "parentIdentifier": "A8297807-9F35-4EEB-96CF-073598F2B034",
+      "curve": null
+    },
+    {
+      "identifier": "2B945ECD-70AB-4314-A183-4579433EA0CC",
+      "category": {
+        "window": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        1.1965965,
+        1.0339011,
+        0
+      ],
+      "transform": [
+        0.5307218,
+        0.0,
+        0.847546,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.84754604,
+        0.0,
+        0.5307218,
+        0.0,
+        6.162603,
+        -0.17658074,
+        -0.66354764,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "top": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "right": {}
+        }
+      ],
+      "parentIdentifier": "6C79FB8D-6574-44B9-A78B-1AB430AFF97A",
+      "curve": null
+    },
+    {
+      "identifier": "4EA35EAC-9EFC-4D33-8CC1-8675D5E73ACA",
+      "category": {
+        "window": {}
+      },
+      "confidence": {
+        "medium": {}
+      },
+      "dimensions": [
+        1.2305106,
+        1.2020775,
+        0
+      ],
+      "transform": [
+        -0.84754634,
+        0.0,
+        0.53072125,
+        0.0,
+        0.0,
+        0.99999994,
+        0.0,
+        0.0,
+        -0.53072125,
+        0.0,
+        -0.84754634,
+        0.0,
+        8.307896,
+        -0.07885732,
+        7.143017,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "top": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "right": {}
+        },
+        {
+          "left": {}
+        }
+      ],
+      "parentIdentifier": "D714D297-67B4-4AE8-BB3E-85757835F3B1",
+      "curve": null
+    },
+    {
+      "identifier": "29E404C4-988D-4934-A984-EF2E203F927F",
+      "category": {
+        "window": {}
+      },
+      "confidence": {
+        "medium": {}
+      },
+      "dimensions": [
+        1.1411383,
+        1.2498173,
+        0
+      ],
+      "transform": [
+        -0.8475462,
+        0.0,
+        0.5307215,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.5307215,
+        0.0,
+        -0.8475462,
+        0.0,
+        5.77157,
+        -0.15840425,
+        8.731228,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "top": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "right": {}
+        }
+      ],
+      "parentIdentifier": "82B35F7C-D2A6-4597-9B52-A4ABFD5CEF84",
+      "curve": null
+    },
+    {
+      "identifier": "86C3F9B4-60C4-421F-B38C-07794CAE5657",
+      "category": {
+        "window": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        1.2217516,
+        0.9684515,
+        0
+      ],
+      "transform": [
+        -0.53072166,
+        0.0,
+        -0.84754604,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.84754604,
+        0.0,
+        -0.5307216,
+        0.0,
+        -0.77336025,
+        -0.22822274,
+        0.09147197,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "left": {}
+        },
+        {
+          "right": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "top": {}
+        }
+      ],
+      "parentIdentifier": "978FE538-E078-4410-A4E2-912290A7041D",
+      "curve": null
+    },
+    {
+      "identifier": "B25C0145-1EDD-4F41-86AA-E25DE94A9650",
+      "category": {
+        "window": {}
+      },
+      "confidence": {
+        "medium": {}
+      },
+      "dimensions": [
+        1.3575007,
+        1.0194225,
+        0
+      ],
+      "transform": [
+        -0.53072155,
+        0.0,
+        -0.8475461,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.8475461,
+        0.0,
+        -0.5307215,
+        0.0,
+        0.7851019,
+        -0.25370824,
+        2.5802891,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "bottom": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "right": {}
+        }
+      ],
+      "parentIdentifier": "978FE538-E078-4410-A4E2-912290A7041D",
+      "curve": null
+    },
+    {
+      "identifier": "52F8F4B7-23E7-458C-9080-64FA44FDD5F8",
+      "category": {
+        "window": {}
+      },
+      "confidence": {
+        "medium": {}
+      },
+      "dimensions": [
+        1.4593154,
+        0.9344709,
+        0
+      ],
+      "transform": [
+        -0.5307217,
+        0.0,
+        -0.8475461,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.8475461,
+        0.0,
+        -0.53072166,
+        0.0,
+        -1.7102394,
+        -0.19424178,
+        -1.4046959,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "bottom": {}
+        },
+        {
+          "right": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "top": {}
+        }
+      ],
+      "parentIdentifier": "978FE538-E078-4410-A4E2-912290A7041D",
+      "curve": null
+    },
+    {
+      "identifier": "8887B92F-65BC-44FA-8145-6B3C14D56304",
+      "category": {
+        "window": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        1.2539055,
+        0.99465966,
+        0
+      ],
+      "transform": [
+        0.5307212,
+        0.0,
+        0.8475464,
+        0.0,
+        0.0,
+        0.99999994,
+        0.0,
+        0.0,
+        -0.84754634,
+        0.0,
+        0.5307211,
+        0.0,
+        3.5937781,
+        -0.20245911,
+        -4.726438,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "top": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "right": {}
+        }
+      ],
+      "parentIdentifier": "37D026D7-CA15-43DB-B8F5-FBB3720D2A0B",
+      "curve": null
+    },
+    {
+      "identifier": "203F687F-755F-48DD-B9FA-52C4712E9666",
+      "category": {
+        "window": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        1.1833657,
+        1.1298735,
+        0
+      ],
+      "transform": [
+        -0.84754646,
+        0.0,
+        0.53072107,
+        0.0,
+        0.0,
+        0.99999994,
+        0.0,
+        0.0,
+        -0.53072107,
+        0.0,
+        -0.8475464,
+        0.0,
+        3.6858892,
+        -0.08628543,
+        10.037251,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "right": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "left": {}
+        }
+      ],
+      "parentIdentifier": "7883690A-B9A3-4154-B7C7-FDBA9D6CD39E",
+      "curve": null
+    },
+    {
+      "identifier": "84B84A2A-7275-4ADE-9C4F-C88DFCBC52BC",
+      "category": {
+        "window": {}
+      },
+      "confidence": {
+        "medium": {}
+      },
+      "dimensions": [
+        2.2859695,
+        1.177757,
+        0
+      ],
+      "transform": [
+        -0.530722,
+        0.0,
+        -0.84754586,
+        0.0,
+        0.0,
+        0.99999994,
+        0.0,
+        0.0,
+        0.84754586,
+        0.0,
+        -0.53072196,
+        0.0,
+        -2.083849,
+        -0.11513455,
+        10.574775,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "right": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "left": {}
+        }
+      ],
+      "parentIdentifier": "969F57AE-C2E6-4775-B982-733BF2B62326",
+      "curve": null
+    },
+    {
+      "identifier": "59D17794-F121-48C6-926B-917B88C0E0C5",
+      "category": {
+        "window": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        0.91552097,
+        1.2171785,
+        0.3157816
+      ],
+      "transform": [
+        0.8475463,
+        0.0,
+        -0.53072125,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.53072125,
+        0.0,
+        0.84754634,
+        0.0,
+        -2.9211292,
+        -0.06920196,
+        6.9887414,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "bottom": {}
+        },
+        {
+          "right": {}
+        },
+        {
+          "top": {}
+        },
+        {
+          "left": {}
+        }
+      ],
+      "parentIdentifier": "AC3E98BD-4D73-4BC7-A5EC-FB539BB109D5",
+      "curve": null
+    },
+    {
+      "identifier": "034A3059-5C4D-456E-A62C-3049D94A34FC",
+      "category": {
+        "window": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        0.95532835,
+        1.2171785,
+        0.3157816
+      ],
+      "transform": [
+        0.8475461,
+        0.0,
+        -0.53072166,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.5307217,
+        0.0,
+        0.8475461,
+        0.0,
+        -1.1677036,
+        -0.07926132,
+        5.890771,
+        1.0
+      ],
+      "polygonCorners": [],
+      "story": 0,
+      "completedEdges": [
+        {
+          "top": {}
+        },
+        {
+          "bottom": {}
+        },
+        {
+          "left": {}
+        },
+        {
+          "right": {}
+        }
+      ],
+      "parentIdentifier": "AC3E98BD-4D73-4BC7-A5EC-FB539BB109D5",
+      "curve": null
+    }
+  ],
+  "floors": [
+    {
+      "identifier": "41C95C2D-688C-4CA0-A058-2D4B78DCC4F4",
+      "category": {
+        "floor": {}
+      },
+      "confidence": {
+        "high": {}
+      },
+      "dimensions": [
+        16.197075,
+        13.8356085,
+        0
+      ],
+      "transform": [
+        0.8472132,
+        0.0,
+        -0.53125274,
+        0.0,
+        -0.5312527,
+        0.0,
+        -0.8472134,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        2.490027,
+        -1.6784937,
+        2.6242423,
+        1.0
+      ],
+      "polygonCorners": [
+        [
+          -8.098536,
+          -6.9178042,
+          1.1920929e-07
+        ],
+        [
+          -8.098537,
+          -0.82630885,
+          1.1920929e-07
+        ],
+        [
+          -3.587751,
+          -0.82630837,
+          1.1920929e-07
+        ],
+        [
+          -1.4200387,
+          -0.82630813,
+          1.1920929e-07
+        ],
+        [
+          -1.4200397,
+          -0.68747425,
+          1.1920929e-07
+        ],
+        [
+          -1.4200435,
+          6.917803,
+          1.1920929e-07
+        ],
+        [
+          4.8396473,
+          6.917804,
+          1.1920929e-07
+        ],
+        [
+          4.839649,
+          2.6533828,
+          1.1920929e-07
+        ],
+        [
+          4.852483,
+          -0.82630694,
+          1.1920929e-07
+        ],
+        [
+          4.8406334,
+          -1.0388045,
+          1.1920929e-07
+        ],
+        [
+          4.8524833,
+          -1.0394652,
+          1.1920929e-07
+        ],
+        [
+          8.098537,
+          -1.0394646,
+          1.1920929e-07
+        ],
+        [
+          8.098538,
+          -4.1043043,
+          1.1920929e-07
+        ],
+        [
+          8.098539,
+          -5.3325963,
+          1.1920929e-07
+        ],
+        [
+          7.9846973,
+          -5.332596,
+          1.1920929e-07
+        ],
+        [
+          7.9846973,
+          -6.917802,
+          1.1920929e-07
+        ],
+        [
+          6.164329,
+          -6.917802,
+          1.1920929e-07
+        ],
+        [
+          5.010144,
+          -6.9178023,
+          1.1920929e-07
+        ],
+        [
+          4.1048956,
+          -6.9178023,
+          1.1920929e-07
+        ],
+        [
+          1.029798,
+          -6.917803,
+          1.1920929e-07
+        ],
+        [
+          -1.9794841,
+          -6.9178033,
+          1.1920929e-07
+        ]
+      ],
+      "story": 0,
+      "completedEdges": [],
+      "parentIdentifier": null,
+      "curve": null
+    }
+  ],
+  "rooms": [
+    {
+      "story": 0,
+      "walls": [
+        {
+          "identifier": "39B2531E-0A35-4ECE-8C6E-3E34058FB760",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            3.1998105,
+            2.1985714,
+            0
+          ],
+          "transform": [
+            0.8475462,
+            0.0,
+            -0.53072137,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.53072137,
+            0.0,
+            0.84754616,
+            0.0,
+            8.5306425,
+            -0.5186279,
+            0.059746206,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "1F8574AC-9659-496C-AAEE-EE2D3344F3F6",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            3.1103685,
+            2.0540478,
+            0
+          ],
+          "transform": [
+            0.53072155,
+            0.0,
+            0.84754616,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.84754616,
+            0.0,
+            0.5307215,
+            0.0,
+            10.703628,
+            -0.5186279,
+            0.47154507,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "C6A8A87F-7DDF-45ED-9048-FCEE8C426A99",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            2.8857937,
+            2.1985714,
+            0.1198406
+          ],
+          "transform": [
+            -0.5307214,
+            0.0,
+            -0.8475461,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.8475462,
+            0.0,
+            -0.5307214,
+            0.0,
+            10.646929,
+            -0.5186279,
+            4.036272,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "4C1970CA-6B68-4091-A59E-779611461C21",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            1.7654462,
+            2.1985714,
+            0
+          ],
+          "transform": [
+            -0.84754634,
+            0.0,
+            0.53072137,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.53072137,
+            0.0,
+            -0.84754634,
+            0.0,
+            12.158758,
+            -0.5186279,
+            4.731663,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "bottom": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "34695F7C-466E-41C2-BD4A-E6BB7360DF0D",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            1.541517,
+            2.0540478,
+            0
+          ],
+          "transform": [
+            0.5307216,
+            0.0,
+            0.8475461,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.8475461,
+            0.0,
+            0.53072155,
+            0.0,
+            12.510088,
+            -0.5186279,
+            3.5737734,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "BA3C00AE-88C2-4DC1-B8A1-2BD0229621F1",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            3.0045369,
+            2.1,
+            0.1198406
+          ],
+          "transform": [
+            -0.53072166,
+            0.0,
+            -0.847546,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.847546,
+            0.0,
+            -0.53072166,
+            0.0,
+            7.978017,
+            -0.5186279,
+            2.2356112,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "9DE6D4C5-0D95-4A5C-B3BB-53B011942A1F",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            1.8808063,
+            2.1985714,
+            0
+          ],
+          "transform": [
+            -0.8199333,
+            0.0,
+            0.5724589,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.5724589,
+            0.0,
+            -0.8199333,
+            0.0,
+            10.704609,
+            -0.5186279,
+            2.3007486,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "F973B0B8-4782-4E09-9A07-0277F2AC17C9",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            1.3190043,
+            2.1985714,
+            0.1198406
+          ],
+          "transform": [
+            -0.84754616,
+            0.0,
+            0.5307217,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.5307217,
+            0.0,
+            -0.84754604,
+            0.0,
+            9.354697,
+            -0.5186279,
+            3.203372,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "top": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        }
+      ],
+      "doors": [
+        {
+          "identifier": "C170312E-18BE-4258-BE2F-BC3CCE0731A9",
+          "category": {
+            "door": {
+              "isOpen": false
+            }
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            0.9566924,
+            1.8754325,
+            0
+          ],
+          "transform": [
+            0.8475463,
+            0.0,
+            -0.53072137,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.53072137,
+            0.0,
+            0.8475463,
+            0.0,
+            8.64115,
+            -0.7292201,
+            -0.009452343,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": "39B2531E-0A35-4ECE-8C6E-3E34058FB760",
+          "curve": null
+        },
+        {
+          "identifier": "61DB8495-AC52-49C1-B8D8-153327654504",
+          "category": {
+            "door": {
+              "isOpen": true
+            }
+          },
+          "confidence": {
+            "medium": {}
+          },
+          "dimensions": [
+            0.71134186,
+            2.07,
+            0.1198406
+          ],
+          "transform": [
+            -0.53072166,
+            0.0,
+            -0.84754604,
+            0.0,
+            0.0,
+            0.99999994,
+            0.0,
+            0.0,
+            0.84754604,
+            0.0,
+            -0.5307216,
+            0.0,
+            7.7976117,
+            -0.6886516,
+            1.94751,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            }
+          ],
+          "parentIdentifier": "BA3C00AE-88C2-4DC1-B8A1-2BD0229621F1",
+          "curve": null
+        },
+        {
+          "identifier": "47F2CA17-069A-451A-8A88-EDC80B29D46D",
+          "category": {
+            "door": {
+              "isOpen": true
+            }
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            0.6743165,
+            1.915933,
+            0.25875035
+          ],
+          "transform": [
+            0.84754616,
+            0.0,
+            -0.5307215,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.53072155,
+            0.0,
+            0.84754616,
+            0.0,
+            9.398567,
+            -0.7500731,
+            3.175901,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": "F973B0B8-4782-4E09-9A07-0277F2AC17C9",
+          "curve": null
+        }
+      ],
+      "windows": [
+        {
+          "identifier": "403F4B11-84F2-40A4-B02A-B21EEBFA37A5",
+          "category": {
+            "window": {}
+          },
+          "confidence": {
+            "medium": {}
+          },
+          "dimensions": [
+            0.4140896,
+            0.92092955,
+            0
+          ],
+          "transform": [
+            0.84754616,
+            0.0,
+            -0.5307214,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.5307215,
+            0.0,
+            0.8475461,
+            0.0,
+            7.9268327,
+            -0.2404113,
+            0.4378433,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": "39B2531E-0A35-4ECE-8C6E-3E34058FB760",
+          "curve": null
+        }
+      ],
+      "floors": [
+        {
+          "identifier": "C1E41B60-2505-47CE-8A4E-4E1319E39738",
+          "category": {
+            "floor": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            3.8860996,
+            5.890331,
+            0
+          ],
+          "transform": [
+            0.84754616,
+            0.0,
+            -0.5307215,
+            0.0,
+            -0.53072166,
+            0.0,
+            -0.84754616,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            9.822579,
+            -1.7585713,
+            2.7256851,
+            1.0
+          ],
+          "polygonCorners": [
+            [
+              0.062242746,
+              -2.9451652,
+              0
+            ],
+            [
+              0.06224346,
+              -0.05937195,
+              0
+            ],
+            [
+              -1.256761,
+              -0.059372425,
+              0
+            ],
+            [
+              -1.2567611,
+              2.9451647,
+              0
+            ],
+            [
+              1.9430499,
+              2.9451647,
+              0
+            ],
+            [
+              1.9430497,
+              -0.05937147,
+              0
+            ],
+            [
+              1.9430498,
+              -1.3502064,
+              0
+            ],
+            [
+              1.8276893,
+              -1.3502064,
+              0
+            ],
+            [
+              1.8276892,
+              -2.9451656,
+              0
+            ]
+          ],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        }
+      ],
+      "referenceOriginTransform": [
+        -0.18298595,
+        0.0,
+        0.98311543,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.98311543,
+        0.0,
+        -0.18298596,
+        0.0,
+        9.2717905,
+        -0.22423144,
+        0.73931706,
+        1.0
+      ]
+    },
+    {
+      "story": 0,
+      "walls": [
+        {
+          "identifier": "5A97C4E1-5A3A-43E6-BD14-504BFEFD9471",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            2.7670004,
+            1.9979999,
+            0.1198406
+          ],
+          "transform": [
+            0.5307214,
+            0.0,
+            0.8475461,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.8475462,
+            0.0,
+            0.5307214,
+            0.0,
+            10.646929,
+            -0.5186279,
+            4.036272,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "1E974BFC-D6DB-445A-BC10-9ACC3ACB2ABE",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            2.7670004,
+            1.9979999,
+            0.1198406
+          ],
+          "transform": [
+            -0.5307216,
+            0.0,
+            -0.84754616,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.84754616,
+            0.0,
+            -0.53072155,
+            0.0,
+            8.904715,
+            -0.5186279,
+            5.1272216,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "A8297807-9F35-4EEB-96CF-073598F2B034",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            1.0905365,
+            1.9979999,
+            0
+          ],
+          "transform": [
+            -0.8475463,
+            0.0,
+            0.53072125,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.53072125,
+            0.0,
+            -0.84754634,
+            0.0,
+            10.898357,
+            -0.5186279,
+            5.5209084,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "3F52DC50-F51E-44EE-A8C9-38B1FE31A687",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            0.8552844,
+            1.5,
+            0
+          ],
+          "transform": [
+            -0.84754664,
+            0.0,
+            0.530721,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.53072095,
+            0.0,
+            -0.8475466,
+            0.0,
+            10.02725,
+            -0.5186279,
+            6.0663824,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "F742CCC3-5C1C-46FB-9B31-27EA89CE4AC8",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            0.55059004,
+            1.9979999,
+            0
+          ],
+          "transform": [
+            -0.53072244,
+            0.0,
+            -0.84754544,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.8475455,
+            0.0,
+            -0.53072244,
+            0.0,
+            10.253416,
+            -0.69793236,
+            5.57407,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "left": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "215B4F7D-D8F6-4E6B-963E-8CA9354F8FBF",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            1.9458209,
+            1.9979999,
+            0.1198406
+          ],
+          "transform": [
+            0.84754616,
+            0.0,
+            -0.5307217,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.5307217,
+            0.0,
+            0.84754604,
+            0.0,
+            9.037197,
+            -0.5186279,
+            3.402186,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        }
+      ],
+      "doors": [
+        {
+          "identifier": "E8477072-A747-4AFA-898B-BCD4EFBA51A3",
+          "category": {
+            "door": {
+              "isOpen": true
+            }
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            0.68279123,
+            1.9147042,
+            0.25875035
+          ],
+          "transform": [
+            0.8475461,
+            0.0,
+            -0.5307216,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.53072166,
+            0.0,
+            0.8475461,
+            0.0,
+            9.397998,
+            -0.7500731,
+            3.1762571,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": "215B4F7D-D8F6-4E6B-963E-8CA9354F8FBF",
+          "curve": null
+        }
+      ],
+      "windows": [
+        {
+          "identifier": "21B992E3-06B1-4262-BEB6-951B9822CAEC",
+          "category": {
+            "window": {}
+          },
+          "confidence": {
+            "medium": {}
+          },
+          "dimensions": [
+            0.83989036,
+            0.8885652,
+            0
+          ],
+          "transform": [
+            -0.8475462,
+            0.0,
+            0.5307214,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.5307214,
+            0.0,
+            -0.8475462,
+            0.0,
+            10.83333,
+            -0.36104333,
+            5.5616264,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": "A8297807-9F35-4EEB-96CF-073598F2B034",
+          "curve": null
+        }
+      ],
+      "floors": [
+        {
+          "identifier": "047C9AF7-80D6-4DC9-9413-622D1C5B6794",
+          "category": {
+            "floor": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            2.8044455,
+            2.066837,
+            0
+          ],
+          "transform": [
+            0.5307216,
+            0.0,
+            0.847546,
+            0.0,
+            0.84754616,
+            0.0,
+            -0.5307216,
+            0.0,
+            0.0,
+            0.99999994,
+            0.0,
+            0.0,
+            9.692102,
+            -1.715371,
+            4.5700445,
+            1.0
+          ],
+          "polygonCorners": [
+            [
+              1.4022226,
+              -0.9124038,
+              1.1920929e-07
+            ],
+            [
+              -1.364779,
+              -0.91240263,
+              1.1920929e-07
+            ],
+            [
+              -1.364779,
+              1.0334182,
+              1.1920929e-07
+            ],
+            [
+              1.4022226,
+              1.0334173,
+              1.1920929e-07
+            ],
+            [
+              1.4022226,
+              -0.057118893,
+              1.1920929e-07
+            ]
+          ],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        }
+      ],
+      "referenceOriginTransform": [
+        -0.18298595,
+        0.0,
+        0.98311543,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.98311543,
+        0.0,
+        -0.18298596,
+        0.0,
+        9.2717905,
+        -0.22423144,
+        0.73931706,
+        1.0
+      ]
+    },
+    {
+      "story": 0,
+      "walls": [
+        {
+          "identifier": "06834772-94C1-47AC-BC6B-09CF065266A3",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            1.3537279,
+            2.405,
+            0.25875035
+          ],
+          "transform": [
+            -0.8475461,
+            0.0,
+            0.5307216,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.53072166,
+            0.0,
+            -0.8475461,
+            0.0,
+            8.207711,
+            -0.5186279,
+            3.921598,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "top": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "97F05232-F50D-4691-85E9-5D4B784D0F94",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            2.9650068,
+            2.405,
+            0.1198406
+          ],
+          "transform": [
+            0.5307217,
+            0.0,
+            0.84754604,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.84754604,
+            0.0,
+            0.53072166,
+            0.0,
+            7.923602,
+            -0.5186279,
+            2.1487126,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "FDE9F711-DE9E-4B46-861B-91741E25A8A2",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            2.3911345,
+            2.405,
+            0.1198406
+          ],
+          "transform": [
+            -0.8475461,
+            0.0,
+            0.53072155,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.5307216,
+            0.0,
+            -0.8475461,
+            0.0,
+            6.586629,
+            -0.5186279,
+            4.9366975,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "8990A07E-B394-4470-9833-B668FF71E92D",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            3.744862,
+            2.405,
+            0.1198406
+          ],
+          "transform": [
+            0.84754616,
+            0.0,
+            -0.5307215,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.53072155,
+            0.0,
+            0.84754616,
+            0.0,
+            5.4250317,
+            -0.5186279,
+            1.7624915,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "D869BB5E-BABE-4E17-A0B2-E34F7E610710",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            3.2744966,
+            2.405,
+            0.1198406
+          ],
+          "transform": [
+            -0.53072166,
+            0.0,
+            -0.84754616,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.84754616,
+            0.0,
+            -0.5307216,
+            0.0,
+            4.681437,
+            -0.5186279,
+            4.178911,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        }
+      ],
+      "doors": [
+        {
+          "identifier": "FC4D2BC3-D9AA-4C9E-A1B4-486B7740A277",
+          "category": {
+            "door": {
+              "isOpen": true
+            }
+          },
+          "confidence": {
+            "medium": {}
+          },
+          "dimensions": [
+            0.6527137,
+            1.9910679,
+            0.1198406
+          ],
+          "transform": [
+            -0.53072166,
+            0.0,
+            -0.84754604,
+            0.0,
+            0.0,
+            0.99999994,
+            0.0,
+            0.0,
+            0.84754604,
+            0.0,
+            -0.5307216,
+            0.0,
+            7.765203,
+            -0.6886516,
+            1.8957545,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": "97F05232-F50D-4691-85E9-5D4B784D0F94",
+          "curve": null
+        },
+        {
+          "identifier": "9E245704-7F56-4A42-80BC-11B7B5669E5F",
+          "category": {
+            "door": {
+              "isOpen": true
+            }
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            0.7520082,
+            1.9841843,
+            0.3157816
+          ],
+          "transform": [
+            0.8475462,
+            0.0,
+            -0.5307215,
+            0.0,
+            0.0,
+            0.99999994,
+            0.0,
+            0.0,
+            0.5307215,
+            0.0,
+            0.8475461,
+            0.0,
+            6.499919,
+            -0.6748441,
+            1.0894114,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": "8990A07E-B394-4470-9833-B668FF71E92D",
+          "curve": null
+        }
+      ],
+      "windows": [],
+      "floors": [
+        {
+          "identifier": "AAA20EDE-960C-4923-BEFF-79A24BB8B509",
+          "category": {
+            "floor": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            5.4905252,
+            6.630904,
+            0
+          ],
+          "transform": [
+            0.5307218,
+            0.0,
+            0.847546,
+            0.0,
+            0.8475461,
+            0.0,
+            -0.5307217,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            5.730544,
+            -1.7001157,
+            4.981143,
+            1.0
+          ],
+          "polygonCorners": [
+            [
+              0.52923226,
+              -0.42941046,
+              0
+            ],
+            [
+              -2.7452633,
+              -0.42940998,
+              0
+            ],
+            [
+              -2.745263,
+              3.3154516,
+              0
+            ],
+            [
+              0.21974397,
+              3.3154514,
+              0
+            ],
+            [
+              0.21974397,
+              1.9617236,
+              0
+            ],
+            [
+              0.5292332,
+              1.9617238,
+              0
+            ]
+          ],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "top": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        }
+      ],
+      "referenceOriginTransform": [
+        -0.18298595,
+        0.0,
+        0.98311543,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.98311543,
+        0.0,
+        -0.18298596,
+        0.0,
+        9.2717905,
+        -0.22423144,
+        0.73931706,
+        1.0
+      ]
+    },
+    {
+      "story": 0,
+      "walls": [
+        {
+          "identifier": "06C9A0E0-6675-49DF-8280-872173F9BBEB",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            3.3296607,
+            2.22,
+            0.1198406
+          ],
+          "transform": [
+            -0.5307216,
+            0.0,
+            -0.8475461,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.8475461,
+            0.0,
+            -0.53072155,
+            0.0,
+            3.244625,
+            -0.5186279,
+            1.06668,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "6C79FB8D-6574-44B9-A78B-1AB430AFF97A",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            3.3296602,
+            2.22,
+            0
+          ],
+          "transform": [
+            0.53072166,
+            0.0,
+            0.8475459,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.847546,
+            0.0,
+            0.5307217,
+            0.0,
+            6.1241193,
+            -0.5186279,
+            -0.72500515,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "7D645634-F2A0-4502-B023-406501F0A25B",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            3.2937148,
+            2.22,
+            0.23029168
+          ],
+          "transform": [
+            0.85055995,
+            0.0,
+            -0.5258779,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.52587783,
+            0.0,
+            0.85055995,
+            0.0,
+            3.7598104,
+            -0.5186279,
+            -1.3056597,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "6576E002-FF6E-4153-90A7-10218575239F",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            3.293714,
+            2.22,
+            0.3157816
+          ],
+          "transform": [
+            -0.8475461,
+            0.0,
+            0.5307215,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.53072155,
+            0.0,
+            -0.8475461,
+            0.0,
+            5.6089344,
+            -0.5186279,
+            1.6473343,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        }
+      ],
+      "doors": [],
+      "windows": [
+        {
+          "identifier": "2B945ECD-70AB-4314-A183-4579433EA0CC",
+          "category": {
+            "window": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            1.1965965,
+            1.0339011,
+            0
+          ],
+          "transform": [
+            0.5307218,
+            0.0,
+            0.847546,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.84754604,
+            0.0,
+            0.5307218,
+            0.0,
+            6.162603,
+            -0.17658074,
+            -0.66354764,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": "6C79FB8D-6574-44B9-A78B-1AB430AFF97A",
+          "curve": null
+        }
+      ],
+      "floors": [
+        {
+          "identifier": "EA6EF541-72D6-46B4-852A-5EB97CC00E9D",
+          "category": {
+            "floor": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            3.3401616,
+            3.3219776,
+            0
+          ],
+          "transform": [
+            0.53072155,
+            0.0,
+            0.84754616,
+            0.0,
+            0.8475462,
+            0.0,
+            -0.5307215,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            4.6016097,
+            -1.6321577,
+            0.13673103,
+            1.0
+          ],
+          "polygonCorners": [
+            [
+              1.6700809,
+              -1.632725,
+              0
+            ],
+            [
+              -1.6595795,
+              -1.632726,
+              0
+            ],
+            [
+              -1.65958,
+              1.6609888,
+              0
+            ],
+            [
+              1.6700804,
+              1.6609886,
+              0
+            ]
+          ],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        }
+      ],
+      "referenceOriginTransform": [
+        -0.18298595,
+        0.0,
+        0.98311543,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.98311543,
+        0.0,
+        -0.18298596,
+        0.0,
+        9.2717905,
+        -0.22423144,
+        0.73931706,
+        1.0
+      ]
+    },
+    {
+      "story": 0,
+      "walls": [
+        {
+          "identifier": "D714D297-67B4-4AE8-BB3E-85757835F3B1",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            2.9322028,
+            2.3307595,
+            0
+          ],
+          "transform": [
+            -0.8475463,
+            0.0,
+            0.53072125,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.53072125,
+            0.0,
+            -0.84754634,
+            0.0,
+            8.339756,
+            -0.5186279,
+            7.123067,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "left": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "63396280-CAA1-4700-81DD-3B369EF5E9A1",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            2.5453548,
+            2.3307595,
+            0.1198406
+          ],
+          "transform": [
+            -0.5307215,
+            0.0,
+            -0.8475461,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.84754616,
+            0.0,
+            -0.5307214,
+            0.0,
+            6.2975483,
+            -0.5186279,
+            6.7597914,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "2E73E56D-EA1B-43A6-9294-6A1FD0AE0CF6",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            2.5453553,
+            2.3307595,
+            0.1198406
+          ],
+          "transform": [
+            0.5307216,
+            0.0,
+            0.84754616,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.84754616,
+            0.0,
+            0.53072155,
+            0.0,
+            8.904715,
+            -0.5186279,
+            5.1272216,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "left": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "top": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "08A1AF03-5F65-4287-AACD-0BCF517E0E88",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            2.9322026,
+            2.3307595,
+            0.21820016
+          ],
+          "transform": [
+            0.8475462,
+            0.0,
+            -0.5307216,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.5307216,
+            0.0,
+            0.84754616,
+            0.0,
+            6.8625073,
+            -0.5186279,
+            4.763946,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        }
+      ],
+      "doors": [
+        {
+          "identifier": "2CDC1652-4013-449F-9D64-9BFD4570EAA8",
+          "category": {
+            "door": {
+              "isOpen": true
+            }
+          },
+          "confidence": {
+            "medium": {}
+          },
+          "dimensions": [
+            0.7122909,
+            2.0530877,
+            0.25875035
+          ],
+          "transform": [
+            0.8475462,
+            0.0,
+            -0.5307214,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.5307214,
+            0.0,
+            0.84754616,
+            0.0,
+            6.1074696,
+            -0.6193047,
+            5.2367406,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "bottom": {}
+            }
+          ],
+          "parentIdentifier": "08A1AF03-5F65-4287-AACD-0BCF517E0E88",
+          "curve": null
+        }
+      ],
+      "windows": [
+        {
+          "identifier": "4EA35EAC-9EFC-4D33-8CC1-8675D5E73ACA",
+          "category": {
+            "window": {}
+          },
+          "confidence": {
+            "medium": {}
+          },
+          "dimensions": [
+            1.2305106,
+            1.2020775,
+            0
+          ],
+          "transform": [
+            -0.84754634,
+            0.0,
+            0.53072125,
+            0.0,
+            0.0,
+            0.99999994,
+            0.0,
+            0.0,
+            -0.53072125,
+            0.0,
+            -0.84754634,
+            0.0,
+            8.307896,
+            -0.07885732,
+            7.143017,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": "D714D297-67B4-4AE8-BB3E-85757835F3B1",
+          "curve": null
+        }
+      ],
+      "floors": [
+        {
+          "identifier": "EE6FA69E-720C-4CE1-B832-113AB5F853CF",
+          "category": {
+            "floor": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            3.0458744,
+            2.608937,
+            0
+          ],
+          "transform": [
+            0.8475459,
+            0.0,
+            -0.5307217,
+            0.0,
+            -0.5307215,
+            0.0,
+            -0.8475463,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            7.62344,
+            -1.6295282,
+            6.030392,
+            1.0
+          ],
+          "polygonCorners": [
+            [
+              -1.417582,
+              -1.3044677,
+              1.1920929e-07
+            ],
+            [
+              -1.417582,
+              1.2408869,
+              1.1920929e-07
+            ],
+            [
+              1.5146213,
+              1.2408869,
+              1.1920929e-07
+            ],
+            [
+              1.5146213,
+              -1.3044682,
+              1.1920929e-07
+            ]
+          ],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "top": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        }
+      ],
+      "referenceOriginTransform": [
+        -0.18298595,
+        0.0,
+        0.98311543,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.98311543,
+        0.0,
+        -0.18298596,
+        0.0,
+        9.2717905,
+        -0.22423144,
+        0.73931706,
+        1.0
+      ]
+    },
+    {
+      "story": 0,
+      "walls": [
+        {
+          "identifier": "FCF1C311-A2C4-4C28-8B70-0EED4B25AF9F",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            3.6364164,
+            2.3618345,
+            0.1198406
+          ],
+          "transform": [
+            -0.5307216,
+            0.0,
+            -0.84754616,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.84754616,
+            0.0,
+            -0.53072155,
+            0.0,
+            3.5096626,
+            -0.5186279,
+            7.976372,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "82B35F7C-D2A6-4597-9B52-A4ABFD5CEF84",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            2.9212394,
+            2.3618345,
+            0
+          ],
+          "transform": [
+            -0.8475463,
+            0.0,
+            0.5307214,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.5307214,
+            0.0,
+            -0.8475463,
+            0.0,
+            5.761239,
+            -0.5186279,
+            8.737698,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "772B90CF-2EE8-43A5-BEDC-7722864ED994",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            2.92124,
+            2.3618345,
+            0.1198406
+          ],
+          "transform": [
+            0.8475462,
+            0.0,
+            -0.5307216,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.5307216,
+            0.0,
+            0.84754616,
+            0.0,
+            3.807953,
+            -0.5186279,
+            5.618357,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "bottom": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "EDCE7973-9FCE-4AD3-8ADE-4E57825B9425",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            3.636417,
+            2.3618345,
+            0.1198406
+          ],
+          "transform": [
+            0.5307215,
+            0.0,
+            0.8475462,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.8475462,
+            0.0,
+            0.5307215,
+            0.0,
+            6.0595284,
+            -0.5186279,
+            6.379682,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        }
+      ],
+      "doors": [
+        {
+          "identifier": "E6889260-4649-4CCF-8EF1-348236E0BE7A",
+          "category": {
+            "door": {
+              "isOpen": true
+            }
+          },
+          "confidence": {
+            "medium": {}
+          },
+          "dimensions": [
+            0.7334988,
+            2.126203,
+            0.1198406
+          ],
+          "transform": [
+            0.53072155,
+            0.0,
+            0.8475461,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.8475461,
+            0.0,
+            0.5307215,
+            0.0,
+            5.3353376,
+            -0.5932243,
+            5.223171,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "left": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": "EDCE7973-9FCE-4AD3-8ADE-4E57825B9425",
+          "curve": null
+        }
+      ],
+      "windows": [
+        {
+          "identifier": "29E404C4-988D-4934-A984-EF2E203F927F",
+          "category": {
+            "window": {}
+          },
+          "confidence": {
+            "medium": {}
+          },
+          "dimensions": [
+            1.1411383,
+            1.2498173,
+            0
+          ],
+          "transform": [
+            -0.8475462,
+            0.0,
+            0.5307215,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.5307215,
+            0.0,
+            -0.8475462,
+            0.0,
+            5.77157,
+            -0.15840425,
+            8.731228,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": "82B35F7C-D2A6-4597-9B52-A4ABFD5CEF84",
+          "curve": null
+        }
+      ],
+      "floors": [
+        {
+          "identifier": "233D81B4-4D03-4E14-8A30-FEEA322C12AB",
+          "category": {
+            "floor": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            3.6364164,
+            3.02165,
+            0
+          ],
+          "transform": [
+            0.53072155,
+            0.0,
+            0.84754604,
+            0.0,
+            0.8475464,
+            0.0,
+            -0.53072107,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            4.796355,
+            -1.6219974,
+            7.250676,
+            1.0
+          ],
+          "polygonCorners": [
+            [
+              1.8182068,
+              -1.4231,
+              1.1920929e-07
+            ],
+            [
+              -1.8182075,
+              -1.4231019,
+              1.1920929e-07
+            ],
+            [
+              -1.8182096,
+              1.498138,
+              1.1920929e-07
+            ],
+            [
+              1.8182073,
+              1.498137,
+              1.1920929e-07
+            ]
+          ],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        }
+      ],
+      "referenceOriginTransform": [
+        -0.18298595,
+        0.0,
+        0.98311543,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.98311543,
+        0.0,
+        -0.18298596,
+        0.0,
+        9.2717905,
+        -0.22423144,
+        0.73931706,
+        1.0
+      ]
+    },
+    {
+      "story": 0,
+      "walls": [
+        {
+          "identifier": "94116C73-0228-47D5-8214-83BF3666ACEA",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            2.173871,
+            2.4,
+            0.1198406
+          ],
+          "transform": [
+            -0.53072137,
+            0.0,
+            -0.8475463,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.8475463,
+            0.0,
+            -0.53072137,
+            0.0,
+            0.52892876,
+            -0.5186279,
+            6.2500005,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "6B4795D6-5B39-490F-B1A7-DC48BD1883D5",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            2.1738706,
+            2.4,
+            0.1198406
+          ],
+          "transform": [
+            0.5307216,
+            0.0,
+            0.8475462,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.84754616,
+            0.0,
+            0.53072155,
+            0.0,
+            4.443418,
+            -0.5186279,
+            3.7988014,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "B22FD013-3566-4060-804B-A58476896214",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            4.4730124,
+            2.4,
+            0
+          ],
+          "transform": [
+            0.84754604,
+            0.0,
+            -0.5307216,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.53072166,
+            0.0,
+            0.84754604,
+            0.0,
+            1.8467045,
+            -0.5186279,
+            4.0031905,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "left": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "bottom": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "ED0A264B-1D86-4E46-A56F-E7AEAC1226C3",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            4.473012,
+            2.4,
+            0.22398536
+          ],
+          "transform": [
+            -0.84754604,
+            0.0,
+            0.5307216,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.53072166,
+            0.0,
+            -0.84754604,
+            0.0,
+            3.1256404,
+            -0.5186279,
+            6.045611,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        }
+      ],
+      "doors": [
+        {
+          "identifier": "10049FF2-414D-4C4C-89BB-A317F1F3F760",
+          "category": {
+            "door": {
+              "isOpen": false
+            }
+          },
+          "confidence": {
+            "medium": {}
+          },
+          "dimensions": [
+            1.2565682,
+            2.2399144,
+            0.3157816
+          ],
+          "transform": [
+            0.8475459,
+            0.0,
+            -0.53072184,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.5307219,
+            0.0,
+            0.8475459,
+            0.0,
+            0.5692177,
+            -0.5469791,
+            4.8031344,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": "B22FD013-3566-4060-804B-A58476896214",
+          "curve": null
+        }
+      ],
+      "windows": [],
+      "floors": [
+        {
+          "identifier": "371E67C9-605F-44A2-ADA0-1579372F77A5",
+          "category": {
+            "floor": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            6.563641,
+            3.3114266,
+            0
+          ],
+          "transform": [
+            0.847546,
+            0.0,
+            -0.5307217,
+            0.0,
+            -0.5307216,
+            0.0,
+            -0.84754604,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            3.6661215,
+            -1.6295159,
+            5.0449853,
+            1.0
+          ],
+          "polygonCorners": [
+            [
+              -3.244678,
+              -0.5181571,
+              -1.1920929e-07
+            ],
+            [
+              -3.244678,
+              1.6557137,
+              -1.1920929e-07
+            ],
+            [
+              1.2283335,
+              1.6557136,
+              -1.1920929e-07
+            ],
+            [
+              1.2283335,
+              -0.51815784,
+              -1.1920929e-07
+            ]
+          ],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "bottom": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        }
+      ],
+      "referenceOriginTransform": [
+        -0.18298595,
+        0.0,
+        0.98311543,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.98311543,
+        0.0,
+        -0.18298596,
+        0.0,
+        9.2717905,
+        -0.22423144,
+        0.73931706,
+        1.0
+      ]
+    },
+    {
+      "story": 0,
+      "walls": [
+        {
+          "identifier": "7883690A-B9A3-4154-B7C7-FDBA9D6CD39E",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            6.0935035,
+            2.3442857,
+            0
+          ],
+          "transform": [
+            -0.8475463,
+            0.0,
+            0.5307212,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.5307212,
+            0.0,
+            -0.84754634,
+            0.0,
+            1.8929038,
+            -0.5186279,
+            11.159992,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "969F57AE-C2E6-4775-B982-733BF2B62326",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            5.869735,
+            2.3655925,
+            0
+          ],
+          "transform": [
+            -0.5307217,
+            0.0,
+            -0.84754604,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.84754604,
+            0.0,
+            -0.53072166,
+            0.0,
+            -2.3166094,
+            -0.5186279,
+            10.203064,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "AC3E98BD-4D73-4BC7-A5EC-FB539BB109D5",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            4.4981008,
+            2.3655925,
+            0
+          ],
+          "transform": [
+            0.84754616,
+            0.0,
+            -0.5307216,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.53072166,
+            0.0,
+            0.84754616,
+            0.0,
+            -2.0216293,
+            -0.5186279,
+            6.425488,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "2150C3FD-0178-4110-BBCC-6596A1BD8B10",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            3.6883001,
+            2.3442857,
+            0.1198406
+          ],
+          "transform": [
+            0.5307216,
+            0.0,
+            0.84754616,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.84754616,
+            0.0,
+            0.53072155,
+            0.0,
+            3.5096626,
+            -0.5186279,
+            7.976372,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "top": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "7E7A757D-1960-4AA8-9C77-FB7A6D16D0BF",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            2.3479247,
+            2.3442857,
+            0.1198406
+          ],
+          "transform": [
+            0.53072137,
+            0.0,
+            0.8475463,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.8475463,
+            0.0,
+            0.53072137,
+            0.0,
+            0.5289278,
+            -0.5186279,
+            6.25,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "B21B6C44-325F-42D9-9F4A-FFC050109C4A",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            0.15014122,
+            2.3442857,
+            0.1198406
+          ],
+          "transform": [
+            0.847545,
+            0.0,
+            -0.53072333,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.53072333,
+            0.0,
+            0.847545,
+            0.0,
+            2.4582548,
+            -0.5186279,
+            6.463519,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "bottom": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "3FA8B826-DC9D-4E23-B713-E195C0B6215F",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            1.6375686,
+            2.3442857,
+            0.1198406
+          ],
+          "transform": [
+            0.8475459,
+            0.0,
+            -0.5307217,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.5307218,
+            0.0,
+            0.847546,
+            0.0,
+            1.850708,
+            -0.5186279,
+            6.843957,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "bottom": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        }
+      ],
+      "doors": [
+        {
+          "identifier": "16A4DFA1-B236-42CD-B967-BD1A41D8709E",
+          "category": {
+            "door": {
+              "isOpen": false
+            }
+          },
+          "confidence": {
+            "medium": {}
+          },
+          "dimensions": [
+            0.88230515,
+            2.169735,
+            0
+          ],
+          "transform": [
+            -0.5307219,
+            0.0,
+            -0.84754586,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.8475459,
+            0.0,
+            -0.5307219,
+            0.0,
+            -1.2364798,
+            -0.5820688,
+            11.927999,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "left": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "bottom": {}
+            }
+          ],
+          "parentIdentifier": "969F57AE-C2E6-4775-B982-733BF2B62326",
+          "curve": null
+        }
+      ],
+      "windows": [
+        {
+          "identifier": "203F687F-755F-48DD-B9FA-52C4712E9666",
+          "category": {
+            "window": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            1.1833657,
+            1.1298735,
+            0
+          ],
+          "transform": [
+            -0.84754646,
+            0.0,
+            0.53072107,
+            0.0,
+            0.0,
+            0.99999994,
+            0.0,
+            0.0,
+            -0.53072107,
+            0.0,
+            -0.8475464,
+            0.0,
+            3.6858892,
+            -0.08628543,
+            10.037251,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": "7883690A-B9A3-4154-B7C7-FDBA9D6CD39E",
+          "curve": null
+        },
+        {
+          "identifier": "84B84A2A-7275-4ADE-9C4F-C88DFCBC52BC",
+          "category": {
+            "window": {}
+          },
+          "confidence": {
+            "medium": {}
+          },
+          "dimensions": [
+            2.2859695,
+            1.177757,
+            0
+          ],
+          "transform": [
+            -0.530722,
+            0.0,
+            -0.84754586,
+            0.0,
+            0.0,
+            0.99999994,
+            0.0,
+            0.0,
+            0.84754586,
+            0.0,
+            -0.53072196,
+            0.0,
+            -2.083849,
+            -0.11513455,
+            10.574775,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": "969F57AE-C2E6-4775-B982-733BF2B62326",
+          "curve": null
+        },
+        {
+          "identifier": "59D17794-F121-48C6-926B-917B88C0E0C5",
+          "category": {
+            "window": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            0.91552097,
+            1.2171785,
+            0.3157816
+          ],
+          "transform": [
+            0.8475463,
+            0.0,
+            -0.53072125,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.53072125,
+            0.0,
+            0.84754634,
+            0.0,
+            -2.9211292,
+            -0.06920196,
+            6.9887414,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": "AC3E98BD-4D73-4BC7-A5EC-FB539BB109D5",
+          "curve": null
+        },
+        {
+          "identifier": "034A3059-5C4D-456E-A62C-3049D94A34FC",
+          "category": {
+            "window": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            0.95532835,
+            1.2171785,
+            0.3157816
+          ],
+          "transform": [
+            0.8475461,
+            0.0,
+            -0.53072166,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.5307217,
+            0.0,
+            0.8475461,
+            0.0,
+            -1.1677036,
+            -0.07926132,
+            5.890771,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": "AC3E98BD-4D73-4BC7-A5EC-FB539BB109D5",
+          "curve": null
+        }
+      ],
+      "floors": [
+        {
+          "identifier": "4E63AB65-B6D6-4C40-9805-FB51F9799283",
+          "category": {
+            "floor": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            6.17636,
+            6.118138,
+            0
+          ],
+          "transform": [
+            0.84754634,
+            0.0,
+            -0.53072125,
+            0.0,
+            -0.53072137,
+            0.0,
+            -0.84754616,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.29465008,
+            -1.5800143,
+            8.62778,
+            1.0
+          ],
+          "polygonCorners": [
+            [
+              -3.049201,
+              -3.0219603,
+              -1.1920929e-07
+            ],
+            [
+              -3.049203,
+              3.014265,
+              -1.1920929e-07
+            ],
+            [
+              1.4067316,
+              3.0142663,
+              -1.1920929e-07
+            ],
+            [
+              1.4067326,
+              0.6663407,
+              -1.1920929e-07
+            ],
+            [
+              3.044301,
+              0.6663412,
+              -1.1920929e-07
+            ],
+            [
+              3.044301,
+              -3.0219574,
+              -1.1920929e-07
+            ]
+          ],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        }
+      ],
+      "referenceOriginTransform": [
+        -0.18298595,
+        0.0,
+        0.98311543,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.98311543,
+        0.0,
+        -0.18298596,
+        0.0,
+        9.2717905,
+        -0.22423144,
+        0.73931706,
+        1.0
+      ]
+    },
+    {
+      "story": 0,
+      "walls": [
+        {
+          "identifier": "978FE538-E078-4410-A4E2-912290A7041D",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            7.5727735,
+            2.3655925,
+            0
+          ],
+          "transform": [
+            -0.5307214,
+            0.0,
+            -0.8475462,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.8475462,
+            0.0,
+            -0.5307214,
+            0.0,
+            -0.36798,
+            -0.5186279,
+            0.7388515,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "6070AF34-A4A9-41A2-B99B-5D571419FDFE",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            6.2563915,
+            2.3655925,
+            0
+          ],
+          "transform": [
+            0.8475461,
+            0.0,
+            -0.5307217,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.5307218,
+            0.0,
+            0.84754604,
+            0.0,
+            0.2662344,
+            -0.5186279,
+            -4.1443768,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "37D026D7-CA15-43DB-B8F5-FBB3720D2A0B",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            4.2042274,
+            2.3655925,
+            0
+          ],
+          "transform": [
+            0.5307213,
+            0.0,
+            0.8475463,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.8475462,
+            0.0,
+            0.5307213,
+            0.0,
+            4.048794,
+            -0.5186279,
+            -3.9997907,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "99F30A7E-BB5A-49C6-8D14-85516AD8D75F",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            3.4119961,
+            2.2099998,
+            0.1198406
+          ],
+          "transform": [
+            0.5307216,
+            0.0,
+            0.8475461,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.8475461,
+            0.0,
+            0.53072155,
+            0.0,
+            3.2075038,
+            -0.5186279,
+            1.0073984,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "bottom": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "D38253E4-B769-4C3E-83EA-E487E7219E05",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            3.3604467,
+            2.2099998,
+            0.23029168
+          ],
+          "transform": [
+            -0.8490659,
+            0.0,
+            0.52828693,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.52828693,
+            0.0,
+            -0.8490659,
+            0.0,
+            3.7483711,
+            -0.5186279,
+            -1.3042039,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        },
+        {
+          "identifier": "3CD3323A-AD9B-47D2-BE53-EF061E76179C",
+          "category": {
+            "wall": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            2.8789349,
+            2.3655925,
+            0
+          ],
+          "transform": [
+            -0.8475461,
+            0.0,
+            0.5307217,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.5307218,
+            0.0,
+            -0.84754604,
+            0.0,
+            2.8737125,
+            -0.5186279,
+            3.1950397,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "left": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        }
+      ],
+      "doors": [
+        {
+          "identifier": "0E1CE154-BED7-48BD-B6C1-A8B62964E93C",
+          "category": {
+            "door": {
+              "isOpen": false
+            }
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            1.2913355,
+            1.9502497,
+            0
+          ],
+          "transform": [
+            0.5307215,
+            0.0,
+            0.8475461,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            -0.84754616,
+            0.0,
+            0.5307214,
+            0.0,
+            4.5821,
+            -0.6918115,
+            -3.1481166,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": "37D026D7-CA15-43DB-B8F5-FBB3720D2A0B",
+          "curve": null
+        }
+      ],
+      "windows": [
+        {
+          "identifier": "86C3F9B4-60C4-421F-B38C-07794CAE5657",
+          "category": {
+            "window": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            1.2217516,
+            0.9684515,
+            0
+          ],
+          "transform": [
+            -0.53072166,
+            0.0,
+            -0.84754604,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.84754604,
+            0.0,
+            -0.5307216,
+            0.0,
+            -0.77336025,
+            -0.22822274,
+            0.09147197,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "left": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            }
+          ],
+          "parentIdentifier": "978FE538-E078-4410-A4E2-912290A7041D",
+          "curve": null
+        },
+        {
+          "identifier": "B25C0145-1EDD-4F41-86AA-E25DE94A9650",
+          "category": {
+            "window": {}
+          },
+          "confidence": {
+            "medium": {}
+          },
+          "dimensions": [
+            1.3575007,
+            1.0194225,
+            0
+          ],
+          "transform": [
+            -0.53072155,
+            0.0,
+            -0.8475461,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.8475461,
+            0.0,
+            -0.5307215,
+            0.0,
+            0.7851019,
+            -0.25370824,
+            2.5802891,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": "978FE538-E078-4410-A4E2-912290A7041D",
+          "curve": null
+        },
+        {
+          "identifier": "52F8F4B7-23E7-458C-9080-64FA44FDD5F8",
+          "category": {
+            "window": {}
+          },
+          "confidence": {
+            "medium": {}
+          },
+          "dimensions": [
+            1.4593154,
+            0.9344709,
+            0
+          ],
+          "transform": [
+            -0.5307217,
+            0.0,
+            -0.8475461,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.8475461,
+            0.0,
+            -0.53072166,
+            0.0,
+            -1.7102394,
+            -0.19424178,
+            -1.4046959,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "top": {}
+            }
+          ],
+          "parentIdentifier": "978FE538-E078-4410-A4E2-912290A7041D",
+          "curve": null
+        },
+        {
+          "identifier": "8887B92F-65BC-44FA-8145-6B3C14D56304",
+          "category": {
+            "window": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            1.2539055,
+            0.99465966,
+            0
+          ],
+          "transform": [
+            0.5307212,
+            0.0,
+            0.8475464,
+            0.0,
+            0.0,
+            0.99999994,
+            0.0,
+            0.0,
+            -0.84754634,
+            0.0,
+            0.5307211,
+            0.0,
+            3.5937781,
+            -0.20245911,
+            -4.726438,
+            1.0
+          ],
+          "polygonCorners": [],
+          "story": 0,
+          "completedEdges": [
+            {
+              "top": {}
+            },
+            {
+              "left": {}
+            },
+            {
+              "bottom": {}
+            },
+            {
+              "right": {}
+            }
+          ],
+          "parentIdentifier": "37D026D7-CA15-43DB-B8F5-FBB3720D2A0B",
+          "curve": null
+        }
+      ],
+      "floors": [
+        {
+          "identifier": "69F5C031-85CC-4298-BCAF-2CBEF91BE6D8",
+          "category": {
+            "floor": {}
+          },
+          "confidence": {
+            "high": {}
+          },
+          "dimensions": [
+            10.258152,
+            6.6003566,
+            0
+          ],
+          "transform": [
+            0.5307216,
+            0.0,
+            0.847546,
+            0.0,
+            0.84754604,
+            0.0,
+            -0.5307216,
+            0.0,
+            0.0,
+            0.99999994,
+            0.0,
+            0.0,
+            2.7848873,
+            -1.5816677,
+            0.23951632,
+            1.0
+          ],
+          "polygonCorners": [
+            [
+              2.5520842,
+              -2.9372091,
+              0
+            ],
+            [
+              -5.0522556,
+              -2.9372072,
+              0
+            ],
+            [
+              -5.0522566,
+              3.3001785,
+              0
+            ],
+            [
+              -0.85991216,
+              3.3001773,
+              0
+            ],
+            [
+              -0.8599117,
+              -0.060269833,
+              0
+            ],
+            [
+              2.5520842,
+              -0.060269833,
+              0
+            ]
+          ],
+          "story": 0,
+          "completedEdges": [
+            {
+              "bottom": {}
+            },
+            {
+              "top": {}
+            },
+            {
+              "right": {}
+            },
+            {
+              "left": {}
+            }
+          ],
+          "parentIdentifier": null,
+          "curve": null
+        }
+      ],
+      "referenceOriginTransform": [
+        -0.18298595,
+        0.0,
+        0.98311543,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.98311543,
+        0.0,
+        -0.18298596,
+        0.0,
+        9.2717905,
+        -0.22423144,
+        0.73931706,
+        1.0
+      ]
+    }
+  ],
+  "wall_thicknesses": [
+    {
+      "room_a": "merged_room_0",
+      "room_b": "merged_room_1",
+      "thickness_cm": 11.8,
+      "confidence": "high",
+      "centerline_wkt": "LINESTRING (11.375278125199557 5.199425382560157, 11.235128210253052 4.975610148001174, 11.081972977716147 4.731025807995932, 10.928817745179241 4.48644146799069, 10.775662512642334 4.241857127985448, 10.62250728010543 3.9972727879802066, 10.469352047568524 3.7526884479749647, 10.316196815031617 3.5081041079697233, 10.163041582494714 3.263519767964481, 10.009886349957807 3.018935427959239, 9.87524855896363 2.803922891435351)"
+    },
+    {
+      "room_a": "merged_room_0",
+      "room_b": "merged_room_1",
+      "thickness_cm": 7.0,
+      "confidence": "medium",
+      "centerline_wkt": "LINESTRING (9.87524855896363 2.803922891435351, 9.813568925539379 2.8425458401827624, 9.701777224600946 2.9125482676012044, 9.589985523662513 2.9825506950196465, 9.47819382272408 3.0525531224380886, 9.366402121785647 3.1225555498565307, 9.254610420847214 3.192557977274973, 9.142818719908783 3.2625604046934145, 9.03102701897035 3.332562832111857, 8.919235318031916 3.4025652595302986, 8.807443617093485 3.472567686948741)"
+    },
+    {
+      "room_a": "merged_room_0",
+      "room_b": "merged_room_2",
+      "thickness_cm": 9.3,
+      "confidence": "high",
+      "centerline_wkt": "LINESTRING (8.723045545736776 3.425400086701189, 8.590059428880025 3.2130253854012985, 8.430602114259955 2.9583770086203303, 8.271144799639888 2.703728631839362, 8.111687485019818 2.4490802550583934, 7.95223017039975 2.1944318782774253, 7.792772855779682 1.9397835014964566, 7.6333155411596145 1.6851351247154884, 7.473858226539545 1.43048674793452, 7.314400911919477 1.1758383711535516, 7.154943597299409 0.9211899943725833)"
+    },
+    {
+      "room_a": "merged_room_1",
+      "room_b": "merged_room_2",
+      "thickness_cm": 17.0,
+      "confidence": "high",
+      "centerline_wkt": "LINESTRING (8.149492441869276 3.825718032638351, 8.314409733100256 3.7224491086027514, 8.479327024331234 3.6191801845671527, 8.644244315562215 3.515911260531553, 8.755657484078046 3.4461458815708386, 8.838116132703771 3.3945114243602923, 8.920574781329496 3.3428769671497456, 9.003033429955222 3.2912425099391993, 9.085492078580948 3.239608052728653, 9.167950727206673 3.1879735955181063, 9.2504093758324 3.13633913830756)"
+    },
+    {
+      "room_a": "merged_room_1",
+      "room_b": "merged_room_4",
+      "thickness_cm": 10.1,
+      "confidence": "high",
+      "centerline_wkt": "LINESTRING (9.620059184052081 6.2696061547808295, 9.473208510605655 6.035089992012585, 9.326357837159225 5.800573829244339, 9.179507163712799 5.566057666476094, 9.032656490266373 5.331541503707848, 8.885805816819946 5.097025340939601, 8.73895514337352 4.862509178171356, 8.592104469927092 4.627993015403111, 8.445253796480666 4.3934768526348655, 8.298403123034237 4.158960689866619, 8.22153333800626 4.036201904649063)"
+    },
+    {
+      "room_a": "merged_room_2",
+      "room_b": "merged_room_3",
+      "thickness_cm": 29.0,
+      "confidence": "high",
+      "centerline_wkt": "LINESTRING (4.0068879602891885 2.6505136052463056, 4.1655851096084575 2.551139652759381, 4.467549922927972 2.3620534754988296, 4.784944220639085 2.16330556904391, 5.102338518350197 1.964557662588991, 5.419732816061309 1.7658097561340713, 5.73712711377242 1.5670618496791522, 6.054521411483531 1.3683139432242328, 6.371915709194644 1.1695660367693133, 6.689310006905756 0.9708181303143939, 6.98964654358565 0.7827515573093224)"
+    },
+    {
+      "room_a": "merged_room_2",
+      "room_b": "merged_room_4",
+      "thickness_cm": 12.4,
+      "confidence": "high",
+      "centerline_wkt": "LINESTRING (7.706914082420182 4.441012539487534, 7.504254412547322 4.567915194348006, 7.30159474267446 4.694817849208478, 7.0989350728016 4.821720504068951, 6.89627540292874 4.948623158929424, 6.6936157330558785 5.075525813789897, 6.4909560631830185 5.202428468650369, 6.2882963933101585 5.3293311235108405, 6.085636723437297 5.456233778371313, 5.882977053564437 5.583136433231786, 5.705441384030457 5.694306781239436)"
+    },
+    {
+      "room_a": "merged_room_2",
+      "room_b": "merged_room_6",
+      "thickness_cm": 12.6,
+      "confidence": "high",
+      "centerline_wkt": "LINESTRING (5.314831069730703 5.244916908231472, 5.227938781187049 5.106152614799363, 5.141046492643396 4.967388321367255, 5.054154204099741 4.828624027935146, 4.899011362404668 4.580865704391403, 4.725226791443894 4.303337113690835, 4.5514422204831195 4.025808522990268, 4.3776576495223445 3.7482799322897, 4.203873078561569 3.470751341589132, 4.030088507600794 3.1932227508885638, 3.869047919878611 2.9360459086898363)"
+    },
+    {
+      "room_a": "merged_room_3",
+      "room_b": "merged_room_8",
+      "thickness_cm": 2.2,
+      "confidence": "low",
+      "centerline_wkt": "LINESTRING (4.0948878122711445 2.424522392695779, 3.918175499086396 2.1423183418665395, 3.7414631859016483 1.8601142910372999, 3.5647508727168997 1.5779102402080607, 3.3880385595321516 1.295706189378821, 3.211326246347403 1.0135021385495813, 3.034613933162655 0.7312980877203418, 2.8579016199779064 0.4490940368911021, 2.6811893067931587 0.1668899860618626, 2.50447699360841 -0.1153140647673767, 2.3277646804236616 -0.3975181155966164)"
+    },
+    {
+      "room_a": "merged_room_3",
+      "room_b": "merged_room_8",
+      "thickness_cm": 7.7,
+      "confidence": "medium",
+      "centerline_wkt": "LINESTRING (2.316487947031804 -0.4361124487885768, 2.5956454532323896 -0.610917038688845, 2.8748029594329747 -0.7857216285891132, 3.1539604656335607 -0.9605262184893817, 3.433117971834146 -1.1353308083896498, 3.712275478034732 -1.3101353982899182, 3.991432984235317 -1.4849399881901864, 4.270590490435903 -1.6597445780904545, 4.549747996636488 -1.8345491679907229, 4.828905502837073 -2.009353757890991, 5.108063009037659 -2.18415834779126)"
+    },
+    {
+      "room_a": "merged_room_4",
+      "room_b": "merged_room_5",
+      "thickness_cm": 12.8,
+      "confidence": "high",
+      "centerline_wkt": "LINESTRING (7.060041346632822 7.922295801996814, 6.9249539157058395 7.706565208263283, 6.789866484778857 7.490834614529753, 6.654779053851874 7.275104020796222, 6.51969162292489 7.059373427062692, 6.384604191997907 6.843642833329161, 6.249516761070924 6.627912239595632, 6.114429330143942 6.412181645862101, 5.9793418992169585 6.1964510521285705, 5.844254468289975 5.98072045839504, 5.709167037362993 5.764989864661509)"
+    },
+    {
+      "room_a": "merged_room_5",
+      "room_b": "merged_room_6",
+      "thickness_cm": 13.3,
+      "confidence": "high",
+      "centerline_wkt": "LINESTRING (2.5899821372384597 6.408612765376207, 2.8375706725677503 6.2535762479379216, 3.0851592078970413 6.0985397304996365, 3.3327477432263324 5.943503213061352, 3.580336278555623 5.788466695623067, 3.8279248138849136 5.633430178184783, 4.075513349214205 5.478393660746497, 4.323101884543496 5.323357143308213, 4.570690419872786 5.168320625869928, 4.818278955202077 5.013284108431643, 5.041660826977332 4.87340546668118)"
+    },
+    {
+      "room_a": "merged_room_5",
+      "room_b": "merged_room_7",
+      "thickness_cm": 7.9,
+      "confidence": "medium",
+      "centerline_wkt": "LINESTRING (4.516913435547259 9.560156142957702, 4.328761342978517 9.259683129717569, 4.135768952411432 8.9514803052928, 3.9427765618443478 8.643277480868031, 3.7497841712772626 8.335074656443261, 3.5567917807101788 8.026871832018493, 3.3637993901430945 7.718669007593725, 3.17080699957601 7.410466183168957, 2.9778146090089255 7.102263358744189, 2.784822218441841 6.794060534319419, 2.591829827874757 6.485857709894651)"
+    },
+    {
+      "room_a": "merged_room_6",
+      "room_b": "merged_room_7",
+      "thickness_cm": 10.8,
+      "confidence": "high",
+      "centerline_wkt": "LINESTRING (1.1455346906218637 7.234703707834289, 1.0301626562941184 7.0504581586831705, 0.9147906219663731 6.866212609532051, 0.7994185876386277 6.681967060380932, 0.6840465533108824 6.497721511229813, 0.5686745189831371 6.3134759620786935, 0.4533024846553919 6.1292304129275745, 0.3379304503276466 5.944984863776456, 0.2225584159999012 5.7607393146253365, 0.1071863816721558 5.5764937654742175, -0.0081856526555895 5.3922482163230985)"
+    },
+    {
+      "room_a": "merged_room_6",
+      "room_b": "merged_room_7",
+      "thickness_cm": 6.3,
+      "confidence": "medium",
+      "centerline_wkt": "LINESTRING (3.75169146917262 5.639797262346981, 3.5621372992969706 5.758493444357755, 3.3725831294213218 5.877189626368528, 3.1830289595456724 5.9958858083793025, 2.993474789670023 6.114581990390077, 2.803920619794374 6.233278172400851, 2.614366449918725 6.351974354411625, 2.3450875177888992 6.520593062429105, 1.965979167227487 6.75798540918723, 1.5868708166660745 6.995377755945354, 1.2077624661046626 7.232770102703476)"
+    },
+    {
+      "room_a": "merged_room_6",
+      "room_b": "merged_room_8",
+      "thickness_cm": 33.3,
+      "confidence": "high",
+      "centerline_wkt": "LINESTRING (0.843649092203918 4.662539061381805, 1.033203245096476 4.543842852249558, 1.222757397989034 4.425146643117311, 1.412311550881592 4.306450433985064, 1.6018657037741502 4.187754224852816, 1.8446273639033195 4.035740211094137, 2.2237356796146655 3.7983478086815254, 2.602843995326011 3.5609554062689135, 2.981952311037357 3.323563003856302, 3.361060626748702 3.0861706014436905, 3.740168942460048 2.8487781990310785)"
+    }
+  ],
+  "cross_floor_gaps": [],
+  "story_footprints": [
+    {
+      "story": 0,
+      "area_m2": 47.01,
+      "room_count": 9,
+      "footprint_wkt": "POLYGON ((-2.3858405196429526 -2.4836561160989232, -2.385611637101843 -2.4832472782754307, 1.6496529989406605 3.960949266529438, 1.6499208525550897 3.9613337014096226, 1.6503296904725029 3.9611048187035287, 4.087835929852337 2.4347721472964996, 4.088231207196505 2.4344967391040084, 4.088321316275829 2.434177412858395, 4.08860814702703 2.432929625395216, 4.089233221620264 2.431069114631379, 4.0900376482505285 2.429278830758363, 4.091013679849858 2.4275760151880297, 4.092151916700675 2.425977066964695, 4.0934413969602 2.424497384833373, 4.094869702228998 2.423151218941447, 4.096423077146941 2.421951533601966, 4.0980865618648465 2.420909882440226, 4.099844136115998 2.420036297126045, 4.101678873500062 2.4193391907633033, 4.10357310449358 2.418825276867153, 4.104139104356158 2.418701178226681, 4.1045638762369885 2.418463375096191, 6.8953058129104265 0.6709394683226128, 6.895690247655916 0.6706716146883988, 6.895461365061382 0.6702627768222078, 5.128860145407329 -2.150945971739256, 5.128592291781927 -2.1513304065860237, 5.128183453879458 -2.1511015238965414, 2.337440500341605 -0.4035769803767796, 2.336323111953069 -0.4027984437034044, 2.3346060413026 -0.4017269010857785, 2.3327894625394454 -0.400834389574734, 2.330891979860723 -0.4001300496823247, 2.328933026027895 -0.3996210947914556, 2.3269326633492904 -0.3993127372811911, 2.3249113782152238 -0.3992081351450187, 2.3228898712899477 -0.3993083596487704, 2.3208888455091543 -0.3996123843594274, 2.318928794054211 -0.4001170956571675, 2.3170297904745665 -0.400817324622998, 2.315211283107743 -0.4017058999754022, 2.3134918959023407 -0.4027737215138575, 2.3118892376838827 -0.4040098533170647, 2.3104197218168836 -0.4054016357414144, 2.309098398110034 -0.4069348150726758, 2.3079387986860227 -0.4085936895031028, 2.288046561115875 -0.4403609783860655, 2.2870877880491745 -0.4420735706615328, 2.2863014951212417 -0.4438718925256339, 2.2856952547616904 -0.445738625158303, 2.285274905395728 -0.4476557909064729, 2.28504449521694 -0.449604926418676, 2.2850062432009763 -0.4515672604571862, 2.285160517735607 -0.4535238946752723, 2.2855058330729476 -0.4554559856185817, 2.2860388636380202 -0.4573449261978799, 2.286754476055854 -0.459172524885465, 2.287645778588686 -0.4609211809094984, 2.2887041875071525 -0.4625740537590338, 2.2899195097562832 -0.4641152253673204, 2.2912800411201784 -0.465529853411464, 2.2927726789399903 -0.4668043142520899, 2.2943830482996694 -0.4679263341364177, 5.125149422830259 -2.240513598790484, 5.125533857481654 -2.240781452442983, 5.125304974956907 -2.241190290271754, 2.900859382284179 -5.793563444117271, 2.9005915286517774 -5.793947879048028, 2.900182690724482 -5.793718996253613, -2.3854560849951474 -2.483923969762537, -2.3858405196429526 -2.4836561160989232))"
+    }
+  ]
+}
