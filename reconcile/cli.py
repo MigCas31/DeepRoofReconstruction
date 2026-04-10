@@ -96,7 +96,7 @@ def reconcile_building(
         "classification": quality.classification,
         "match_rate": summary["match_rate"],
         "wall_count_merged": quality.wall_count_merged,
-        "wall_count_raw": quality.wall_count_raw,
+        "wall_count_scan": quality.wall_count_scan,
         "wall_reduction_pct": quality.wall_reduction_pct,
         "mean_width_delta_cm": quality.mean_width_delta_cm,
         "mean_height_delta_cm": quality.mean_height_delta_cm,
@@ -129,7 +129,7 @@ def main():
 
     print(f"[{result['classification']}] {result['uuid']}")
     print(f"  Match rate: {result['match_rate']:.1%}")
-    print(f"  Walls: {result['wall_count_raw']} raw -> {result['wall_count_merged']} merged")
+    print(f"  Walls: {result['wall_count_scan']} per-scan \u2192 {result['wall_count_merged']} after merge")
     print(f"  Dimension deltas: width={result['mean_width_delta_cm']:.1f}cm, height={result['mean_height_delta_cm']:.1f}cm")
     print(f"  Floor gaps: {result['floor_gap_count']} measurements, median={result['floor_gap_median_cm']:.1f}cm")
     print(f"  Scan sessions: {result['scan_session_count']}, wall displacement: {result['median_wall_displacement_m']:.1f}m median")

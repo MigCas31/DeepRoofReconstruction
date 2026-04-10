@@ -15,9 +15,9 @@ class BuildingQualityReport:
     uuid: str
     classification: str = "GREEN"  # GREEN / YELLOW / RED
     merged_room_count: int = 0
-    raw_room_count: int = 0
+    scan_room_count: int = 0
     wall_count_merged: int = 0
-    wall_count_raw: int = 0
+    wall_count_scan: int = 0
     wall_reduction_pct: float = 0.0
     max_width_delta_cm: float = 0.0
     max_height_delta_cm: float = 0.0
@@ -91,9 +91,9 @@ def build_quality_report(
     report = BuildingQualityReport(
         uuid=uuid,
         merged_room_count=len(building.rooms),
-        raw_room_count=len(raw_rooms),
+        scan_room_count=len(raw_rooms),
         wall_count_merged=merged_wall_count,
-        wall_count_raw=raw_wall_count,
+        wall_count_scan=raw_wall_count,
         wall_reduction_pct=reduction_pct,
         max_width_delta_cm=max(width_deltas) if width_deltas else 0.0,
         max_height_delta_cm=max(height_deltas) if height_deltas else 0.0,

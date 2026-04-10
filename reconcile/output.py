@@ -76,7 +76,7 @@ def write_reconciled(
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "classification": quality_report.classification,
             "wall_count_merged": quality_report.wall_count_merged,
-            "wall_count_raw": quality_report.wall_count_raw,
+            "wall_count_scan": quality_report.wall_count_scan,
             "wall_reduction_pct": round(quality_report.wall_reduction_pct, 1),
             "mean_width_delta_cm": round(quality_report.mean_width_delta_cm, 1),
             "mean_height_delta_cm": round(quality_report.mean_height_delta_cm, 1),

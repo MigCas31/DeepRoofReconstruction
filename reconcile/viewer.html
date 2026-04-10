@@ -46,7 +46,7 @@ body { background:#111; color:#ddd; font-family:-apple-system,BlinkMacSystemFont
   pointer-events:none;
 }
 #controls-bar > * { pointer-events:auto; }
-.toggle-row { display:flex; gap:14px; font-size:11px; }
+.toggle-row { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:11px; max-width:600px; }
 .toggle-row label { cursor:pointer; display:flex; align-items:center; gap:4px; white-space:nowrap; }
 .toggle-row input { accent-color:#3a3aff; }
 #legend-box { font-size:10px; line-height:1.8; }
@@ -73,12 +73,22 @@ canvas { display:block; width:100%; height:100%; }
 <div id="viewport">
   <div id="controls-bar">
     <div class="toggle-row">
-      <label><input type="checkbox" id="show-merged"> Merged</label>
-      <label><input type="checkbox" id="show-raw" checked> Raw walls</label>
+      <label><input type="checkbox" id="show-merged"> Merged (Apple)</label>
+      <label><input type="checkbox" id="show-computed" checked> Computed walls</label>
+      <label><input type="checkbox" id="show-doors" checked> Doors</label>
+      <label><input type="checkbox" id="show-windows" checked> Windows</label>
       <label><input type="checkbox" id="show-floors" checked> Floors</label>
       <label><input type="checkbox" id="show-wireframe"> Wireframe</label>
       <label><input type="checkbox" id="color-by-story" checked> Color by story</label>
-      <label><input type="checkbox" id="show-gaps"> Cross-floor gaps</label>
+      <label><input type="checkbox" id="color-by-source"> Color by source</label>
+      <label><input type="checkbox" id="show-gaps"> Gap walls</label>
+      <label><input type="checkbox" id="show-cross-story"> Cross-story gaps</label>
+      <label><input type="checkbox" id="show-extensions" checked> Wall extensions</label>
+      <label><input type="checkbox" id="show-ceilings"> Ceilings</label>
+      <label><input type="checkbox" id="show-overlaps"> Floor overlaps</label>
+      <label><input type="checkbox" id="show-wall-clips"> Wall clips</label>
+      <label><input type="checkbox" id="show-ext-gaps"> Exterior gaps</label>
+      <label style="border-left:1px solid #444;padding-left:8px"><input type="checkbox" id="show-full-model"> Full model</label>
     </div>
     <div id="legend-box"></div>
   </div>
@@ -141,41 +151,108 @@ const ROOM_COLORS = [
   0x82e0aa, 0xf0b27a, 0xaed6f1, 0xd7bde2, 0xa3e4d7,
   0xf5b7b1, 0x85c1e9, 0xfad7a0, 0xd5f5e3, 0xe8daef,
 ];
+const DOOR_COLOR = 0xcc7733;
+const DOOR_EDGE = 0xff9944;
+const WINDOW_COLOR = 0x33aadd;
+const WINDOW_EDGE = 0x55ccff;
 const MERGED_COLOR = 0x4488ff;
 const MERGED_EDGE = 0x6699ff;
 
 let colorByStory = true;
+let colorBySource = false;
 let DATA = [];
 let currentBuilding = 0;
 let groups = {
   merged: new THREE.Group(),
-  raw: new THREE.Group(),
+  computed: new THREE.Group(),
+  doors: new THREE.Group(),
+  windows: new THREE.Group(),
   floors: new THREE.Group(),
   gaps: new THREE.Group(),
+  extensions: new THREE.Group(),
+  overlaps: new THREE.Group(),
+  wallClips: new THREE.Group(),
+  extGaps: new THREE.Group(),
+  ceilings: new THREE.Group(),
+  crossStory: new THREE.Group(),
+  fullModel: new THREE.Group(),
 };
 scene.add(groups.merged);
-scene.add(groups.raw);
+scene.add(groups.computed);
+scene.add(groups.doors);
+scene.add(groups.windows);
 scene.add(groups.floors);
 scene.add(groups.gaps);
+scene.add(groups.extensions);
+scene.add(groups.overlaps);
+scene.add(groups.wallClips);
+scene.add(groups.extGaps);
+scene.add(groups.ceilings);
+scene.add(groups.crossStory);
+scene.add(groups.fullModel);
+groups.overlaps.visible = false;
+groups.fullModel.visible = false;
+groups.wallClips.visible = false;
 groups.merged.visible = false;
 groups.gaps.visible = false;
+groups.crossStory.visible = false;
+groups.extGaps.visible = false;
+groups.ceilings.visible = false;
 
-function triangulateFan(corners) {
-  const tris = [];
-  for (let i = 1; i < corners.length - 1; i++) {
-    tris.push(corners[0], corners[i], corners[i + 1]);
-  }
-  return tris;
-}
+// Source provenance colors for "Color by source" mode
+const SOURCE_COLORS = {
+  'scan-cache':       { fill: 0x33cc66, edge: 0x44ee77 },
+  'hybrid':           { fill: 0xccaa33, edge: 0xeebb44 },
+  'merged-room':      { fill: 0x4488ff, edge: 0x6699ff },
+  'scan-cache-dedup': { fill: 0x44cccc, edge: 0x55eedd },
+};
+const SOURCE_LABELS = {
+  'scan-cache':       'Scan (SVD)',
+  'hybrid':           'Hybrid',
+  'merged-room':      'Merged fallback',
+  'scan-cache-dedup': 'Scan (dedup)',
+};
 
 function createPolygonMesh(corners, color, opacity) {
-  const tris = triangulateFan(corners);
-  const verts = new Float32Array(tris.length * 3);
-  for (let i = 0; i < tris.length; i++) {
-    verts[i*3] = tris[i][0]; verts[i*3+1] = tris[i][1]; verts[i*3+2] = tris[i][2];
+  if (corners.length < 3) return null;
+
+  // Determine the best 2D projection plane by computing the polygon normal
+  let nx = 0, ny = 0, nz = 0;
+  for (let i = 0; i < corners.length; i++) {
+    const cur = corners[i], next = corners[(i + 1) % corners.length];
+    nx += (cur[1] - next[1]) * (cur[2] + next[2]);
+    ny += (cur[2] - next[2]) * (cur[0] + next[0]);
+    nz += (cur[0] - next[0]) * (cur[1] + next[1]);
   }
+  const anx = Math.abs(nx), any = Math.abs(ny), anz = Math.abs(nz);
+
+  // Project to 2D on the plane with the largest normal component
+  let axis0, axis1;
+  if (any >= anx && any >= anz) { axis0 = 0; axis1 = 2; }      // floor-like (Y up) -> XZ
+  else if (anx >= any && anx >= anz) { axis0 = 1; axis1 = 2; }  // X-facing wall -> YZ
+  else { axis0 = 0; axis1 = 1; }                                 // Z-facing wall -> XY
+
+  // Use Three.js ShapeUtils for ear-clipping triangulation
+  const contour = corners.map(c => new THREE.Vector2(c[axis0], c[axis1]));
+  let indices;
+  try {
+    indices = THREE.ShapeUtils.triangulateShape(contour, []);
+  } catch (e) {
+    // Fallback to fan triangulation if ear-clipping fails
+    indices = [];
+    for (let i = 1; i < corners.length - 1; i++) indices.push([0, i, i + 1]);
+  }
+
+  const verts = new Float32Array(corners.length * 3);
+  for (let i = 0; i < corners.length; i++) {
+    verts[i*3] = corners[i][0]; verts[i*3+1] = corners[i][1]; verts[i*3+2] = corners[i][2];
+  }
+  const idx = [];
+  for (const tri of indices) { idx.push(tri[0], tri[1], tri[2]); }
+
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+  geo.setIndex(idx);
   geo.computeVertexNormals();
   return new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
     color, opacity, transparent: true, side: THREE.DoubleSide, depthWrite: false,
@@ -203,7 +280,8 @@ function disposeGroup(g) {
 function addWalls(group, walls, color, edgeColor, opacity) {
   for (const w of walls) {
     if (w.corners.length >= 3) {
-      group.add(createPolygonMesh(w.corners, color, opacity));
+      const mesh = createPolygonMesh(w.corners, color, opacity);
+      if (mesh) group.add(mesh);
       group.add(createEdgeLoop(w.corners, edgeColor));
     }
   }
@@ -211,12 +289,12 @@ function addWalls(group, walls, color, edgeColor, opacity) {
 
 function loadBuilding(index) {
   currentBuilding = index;
-  [groups.merged, groups.raw, groups.floors, groups.gaps].forEach(disposeGroup);
+  [groups.merged, groups.computed, groups.doors, groups.windows, groups.floors, groups.gaps, groups.crossStory, groups.extensions, groups.overlaps, groups.wallClips, groups.extGaps, groups.ceilings, groups.fullModel].forEach(disposeGroup);
 
   const bldg = DATA[index];
 
   const allCorners = bldg.rooms.flatMap(r =>
-    (r.walls_raw.length > 0 ? r.walls_raw : r.walls_merged).flatMap(w => w.corners)
+    (r.walls_computed.length > 0 ? r.walls_computed : r.walls_merged).flatMap(w => w.corners)
   );
   let cx = 0, cy = 0, cz = 0;
   for (const c of allCorners) { cx += c[0]; cy += c[1]; cz += c[2]; }
@@ -231,48 +309,241 @@ function loadBuilding(index) {
     const wallEdge = colorByStory ? STORY_COLORS[story % STORY_COLORS.length] : 0x66ccaa;
 
     addWalls(groups.merged, room.walls_merged, MERGED_COLOR, MERGED_EDGE, 0.4);
-    addWalls(groups.raw, room.walls_raw, wallColor, wallEdge, 0.5);
+
+    // Computed walls: color by source provenance or by story/room
+    if (colorBySource) {
+      for (const w of room.walls_computed) {
+        if (w.corners.length < 3) continue;
+        const src = SOURCE_COLORS[w.source] || SOURCE_COLORS['merged-room'];
+        const mesh = createPolygonMesh(w.corners, src.fill, 0.5);
+        if (mesh) groups.computed.add(mesh);
+        groups.computed.add(createEdgeLoop(w.corners, src.edge));
+      }
+    } else {
+      addWalls(groups.computed, room.walls_computed, wallColor, wallEdge, 0.5);
+    }
+
+    // Render wall extension strips (computed portions closing floor gaps)
+    // extension_strip is a list of quads (each quad is 4 corners)
+    for (const w of room.walls_computed) {
+      if (w.extension_strip && w.extension_strip.length > 0) {
+        const strips = Array.isArray(w.extension_strip[0]?.[0]) ? w.extension_strip : [w.extension_strip];
+        for (const quad of strips) {
+          if (quad.length >= 3) {
+            const mesh = createPolygonMesh(quad, 0xffaa44, 0.35);
+            if (mesh) groups.extensions.add(mesh);
+            groups.extensions.add(createEdgeLoop(quad, 0xff8800));
+          }
+        }
+      }
+    }
+
+    // Doors
+    for (const d of (room.doors || [])) {
+      if (d.corners.length >= 3) {
+        const mesh = createPolygonMesh(d.corners, DOOR_COLOR, 0.7);
+        if (mesh) groups.doors.add(mesh);
+        groups.doors.add(createEdgeLoop(d.corners, DOOR_EDGE));
+      }
+    }
+
+    // Windows
+    for (const w of (room.windows || [])) {
+      if (w.corners.length >= 3) {
+        const mesh = createPolygonMesh(w.corners, WINDOW_COLOR, 0.6);
+        if (mesh) groups.windows.add(mesh);
+        groups.windows.add(createEdgeLoop(w.corners, WINDOW_EDGE));
+      }
+    }
 
     if (room.floor_polygon && room.floor_polygon.length >= 3) {
-      groups.floors.add(createPolygonMesh(room.floor_polygon, floorColor, 0.4));
+      const floorMesh = createPolygonMesh(room.floor_polygon, floorColor, 0.4);
+      if (floorMesh) groups.floors.add(floorMesh);
       groups.floors.add(createEdgeLoop(room.floor_polygon, floorColor));
     }
+
+    // Floor overlap regions (clipped area visualization)
+    if (room.floor_overlap_region && room.floor_overlap_region.length >= 3) {
+      const overlapMesh = createPolygonMesh(room.floor_overlap_region, 0xff2222, 0.5);
+      if (overlapMesh) groups.overlaps.add(overlapMesh);
+      groups.overlaps.add(createEdgeLoop(room.floor_overlap_region, 0xff4444));
+    }
+
+    // Wall clip ghosts (original extent of clipped staircase walls)
+    for (const w of room.walls_computed) {
+      if (w.wall_clipped && w.corners_original && w.corners_original.length >= 3) {
+        const ghost = createPolygonMesh(w.corners_original, 0xff6666, 0.15);
+        if (ghost) groups.wallClips.add(ghost);
+        groups.wallClips.add(createEdgeLoop(w.corners_original, 0xff4444));
+      }
+    }
+
+    // Ceiling polygon (roof plane projection)
+    if (room.ceiling_polygon && room.ceiling_polygon.length >= 3) {
+      const ceilColor = colorByStory ? STORY_COLORS[story % STORY_COLORS.length] : 0x88aacc;
+      const ceilOpacity = room.ceiling_type === 'sloped' ? 0.35 : 0.25;
+      const ceilMesh = createPolygonMesh(room.ceiling_polygon, ceilColor, ceilOpacity);
+      if (ceilMesh) groups.ceilings.add(ceilMesh);
+      groups.ceilings.add(createEdgeLoop(room.ceiling_polygon, ceilColor));
+    }
+
   });
 
   // Cross-floor gap regions
-  const GAP_COLORS = { high: 0xff00ff, medium: 0xcc44ff, low: 0x8866ff };
+  // within_story = strips between rooms (magenta), cross_story = coverage differences (orange)
+  const WITHIN_COLORS = { high: 0xff00ff, medium: 0xcc44ff, low: 0x8866ff };
+  const CROSS_COLORS = { high: 0xff8800, medium: 0xffaa44, low: 0xffcc88 };
   const GAP_OPACITIES = { high: 0.55, medium: 0.4, low: 0.25 };
   const gapList = bldg.cross_floor_gaps || [];
   for (const gap of gapList) {
     if (gap.corners && gap.corners.length >= 3) {
-      const col = GAP_COLORS[gap.confidence] || 0xff2222;
+      const isCross = gap.type === 'cross_story';
+      const palette = isCross ? CROSS_COLORS : WITHIN_COLORS;
+      const col = palette[gap.confidence] || 0xff2222;
       const opa = GAP_OPACITIES[gap.confidence] || 0.3;
-      groups.gaps.add(createPolygonMesh(gap.corners, col, opa));
-      groups.gaps.add(createEdgeLoop(gap.corners, col));
+      const targetGroup = isCross ? groups.crossStory : groups.gaps;
+      const gapMesh = createPolygonMesh(gap.corners, col, opa);
+      if (gapMesh) targetGroup.add(gapMesh);
+      targetGroup.add(createEdgeLoop(gap.corners, col));
     }
   }
+
+  // Stitch walls (fill gaps between disconnected wall endpoints)
+  const STITCH_COLOR = 0x44aa88;
+  const STITCH_EDGE = 0x66ccaa;
+  for (const sw of (bldg.stitch_walls || [])) {
+    if (sw.corners && sw.corners.length >= 3) {
+      const sCol = colorByStory ? STORY_WALL_COLORS[(sw.story || 0) % STORY_WALL_COLORS.length] : STITCH_COLOR;
+      const sEdge = colorByStory ? STORY_COLORS[(sw.story || 0) % STORY_COLORS.length] : STITCH_EDGE;
+      const mesh = createPolygonMesh(sw.corners, sCol, 0.5);
+      if (mesh) groups.computed.add(mesh);
+      groups.computed.add(createEdgeLoop(sw.corners, sEdge));
+    }
+  }
+
+  // Gap walls (vertical walls along cross-floor gap edges)
+  const GAP_WALL_COLOR = 0xcc44ff;
+  const GAP_WALL_EDGE = 0xaa22dd;
+  for (const gw of (bldg.gap_walls || [])) {
+    if (gw.corners && gw.corners.length >= 3) {
+      const mesh = createPolygonMesh(gw.corners, GAP_WALL_COLOR, 0.35);
+      if (mesh) groups.gaps.add(mesh);
+      groups.gaps.add(createEdgeLoop(gw.corners, GAP_WALL_EDGE));
+    }
+  }
+
+  // Exterior gap indicators (door/opening + parallel wall pairs)
+  const extGapList = bldg.exterior_gap_indicators || [];
+  const EXT_GAP_COLOR = 0xff44ff;
+  const EXT_GAP_EDGE = 0xff66ff;
+  for (const ind of extGapList) {
+    if (ind.element_corners && ind.element_corners.length >= 3) {
+      const mesh = createPolygonMesh(ind.element_corners, EXT_GAP_COLOR, 0.7);
+      if (mesh) groups.extGaps.add(mesh);
+      groups.extGaps.add(createEdgeLoop(ind.element_corners, EXT_GAP_EDGE));
+    }
+    if (ind.wall_corners && ind.wall_corners.length >= 3) {
+      const mesh = createPolygonMesh(ind.wall_corners, EXT_GAP_COLOR, 0.4);
+      if (mesh) groups.extGaps.add(mesh);
+      groups.extGaps.add(createEdgeLoop(ind.wall_corners, EXT_GAP_EDGE));
+    }
+  }
+
+  // Gap closures (side walls filling detected gaps)
+  const GAP_CLOSURE_COLOR = 0x44ddaa;
+  const GAP_CLOSURE_EDGE = 0x33bb88;
+  for (const gc of (bldg.gap_closures || [])) {
+    if (gc.corners && gc.corners.length >= 3) {
+      const mesh = createPolygonMesh(gc.corners, GAP_CLOSURE_COLOR, 0.5);
+      if (mesh) groups.extGaps.add(mesh);
+      groups.extGaps.add(createEdgeLoop(gc.corners, GAP_CLOSURE_EDGE));
+    }
+  }
+
+  // Full model: all structural geometry in one color, opaque to avoid z-fighting
+  const FULL_COLOR = 0x6688aa;
+  const FULL_EDGE = 0x6688aa;
+  const fullModelMat = new THREE.MeshStandardMaterial({
+    color: FULL_COLOR, opacity: 0.7, transparent: true, side: THREE.DoubleSide, depthWrite: true,
+  });
+  function addFullMesh(corners) {
+    if (!corners || corners.length < 3) return;
+    const mesh = createPolygonMesh(corners, FULL_COLOR, 0.7);
+    if (mesh) {
+      mesh.material = fullModelMat;
+      groups.fullModel.add(mesh);
+    }
+    groups.fullModel.add(createEdgeLoop(corners, FULL_EDGE));
+  }
+  // a) Computed walls + extension strips (merged visually)
+  bldg.rooms.forEach(room => {
+    for (const w of room.walls_computed) {
+      addFullMesh(w.corners);
+      // Extension strips as continuation (same color = no seam)
+      if (w.extension_strip && w.extension_strip.length > 0) {
+        const strips = Array.isArray(w.extension_strip[0]?.[0]) ? w.extension_strip : [w.extension_strip];
+        for (const quad of strips) addFullMesh(quad);
+      }
+    }
+  });
+  // b) Gap walls
+  for (const gw of (bldg.gap_walls || [])) addFullMesh(gw.corners);
+  // c) Gap closures (side/floor/ceiling quads filling exterior gaps)
+  for (const gc of (bldg.gap_closures || [])) addFullMesh(gc.corners);
+  // d) Stitch walls
+  for (const sw of (bldg.stitch_walls || [])) addFullMesh(sw.corners);
 
   // Legend
   const legendBox = document.getElementById('legend-box');
   let html = '';
-  if (colorByStory) {
+  if (colorBySource) {
+    for (const [src, label] of Object.entries(SOURCE_LABELS)) {
+      const c = SOURCE_COLORS[src].fill.toString(16).padStart(6, '0');
+      html += `<span style="background:#${c}"></span>${label} `;
+    }
+  } else if (colorByStory) {
     for (const s of [...storySet].sort()) {
       const c = STORY_COLORS[s % STORY_COLORS.length].toString(16).padStart(6, '0');
       html += `<span style="background:#${c}"></span>S${s} `;
     }
   }
+  html += `<span style="background:#c73"></span>Door `;
+  html += `<span style="background:#3ad"></span>Window `;
+  if (document.getElementById('show-overlaps').checked) {
+    html += `<span style="background:#f22"></span>Overlap `;
+  }
+  if (document.getElementById('show-wall-clips').checked) {
+    html += `<span style="background:#f66;opacity:0.3"></span>Clipped wall `;
+  }
+  if (document.getElementById('show-full-model').checked) {
+    html += `<span style="background:#68a"></span>Full model `;
+  }
   legendBox.innerHTML = html;
 
   // Info
-  const rawCount = bldg.rooms.reduce((s, r) => s + r.walls_raw.length, 0);
+  const computedCount = bldg.rooms.reduce((s, r) => s + r.walls_computed.length, 0);
   const mergedCount = bldg.rooms.reduce((s, r) => s + r.walls_merged.length, 0);
+  const doorCount = bldg.rooms.reduce((s, r) => s + (r.doors || []).length, 0);
+  const windowCount = bldg.rooms.reduce((s, r) => s + (r.windows || []).length, 0);
   const addr = bldg.address || bldg.uuid;
   const gapHigh = gapList.filter(g => g.confidence === 'high').length;
   const gapMed = gapList.filter(g => g.confidence === 'medium').length;
   const gapInfo = gapList.length > 0 ? ` &middot; gaps: ${gapHigh}h/${gapMed}m/${gapList.length - gapHigh - gapMed}l` : '';
+  const extCount = bldg.rooms.reduce((s, r) => s + r.walls_computed.filter(w => w.extension_strip).length, 0);
+  const extInfo = extCount > 0 ? ` &middot; ${extCount} extended` : '';
+  const om = bldg.overlap_metrics || {};
+  const overlapInfo = om.floor_overlap_count > 0 ? ` &middot; <span style="color:#f44">${om.floor_overlap_count} overlaps (${om.total_floor_overlap_area_m2}m&sup2;)</span>` : '';
+  const wallClipInfo = om.walls_clipped > 0 ? ` &middot; <span style="color:#f66">${om.walls_clipped} wall clips</span>` : '';
+  const extGapInfo = extGapList.length > 0 ? ` &middot; <span style="color:#f4f">${extGapList.length} ext.gaps</span>` : '';
+  const openingsInfo = (doorCount + windowCount) > 0 ? ` &middot; <span style="color:#c73">${doorCount}d</span> <span style="color:#3ad">${windowCount}w</span>` : '';
+  // Source breakdown for computed walls
+  const srcCounts = {};
+  bldg.rooms.forEach(r => r.walls_computed.forEach(w => { srcCounts[w.source] = (srcCounts[w.source] || 0) + 1; }));
+  const srcInfo = Object.entries(srcCounts).map(([k, v]) => `${v} ${k}`).join(', ');
   document.getElementById('building-info').innerHTML =
     `${addr} &middot; ${bldg.rooms.length} rooms &middot; ` +
-    `${bldg.stories_found} stories &middot; ${rawCount} raw / ${mergedCount} merged walls${gapInfo}`;
+    `${bldg.stories_found} stories &middot; ${computedCount} computed / ${mergedCount} merged walls${openingsInfo}${gapInfo}${extInfo}${overlapInfo}${wallClipInfo}${extGapInfo}` +
+    `<br><span style="color:#555">Sources: ${srcInfo}</span>`;
 
   // Camera
   let maxDist = 5;
@@ -323,10 +594,12 @@ document.addEventListener('keydown', e => {
 });
 
 document.getElementById('show-merged').addEventListener('change', e => groups.merged.visible = e.target.checked);
-document.getElementById('show-raw').addEventListener('change', e => groups.raw.visible = e.target.checked);
+document.getElementById('show-computed').addEventListener('change', e => groups.computed.visible = e.target.checked);
+document.getElementById('show-doors').addEventListener('change', e => groups.doors.visible = e.target.checked);
+document.getElementById('show-windows').addEventListener('change', e => groups.windows.visible = e.target.checked);
 document.getElementById('show-floors').addEventListener('change', e => groups.floors.visible = e.target.checked);
 document.getElementById('show-wireframe').addEventListener('change', e => {
-  [groups.merged, groups.raw].forEach(g => {
+  [groups.merged, groups.computed].forEach(g => {
     g.traverse(c => { if (c.isMesh) c.material.wireframe = e.target.checked; });
   });
 });
@@ -334,7 +607,27 @@ document.getElementById('color-by-story').addEventListener('change', e => {
   colorByStory = e.target.checked;
   loadBuilding(currentBuilding);
 });
+document.getElementById('color-by-source').addEventListener('change', e => {
+  colorBySource = e.target.checked;
+  loadBuilding(currentBuilding);
+});
 document.getElementById('show-gaps').addEventListener('change', e => groups.gaps.visible = e.target.checked);
+document.getElementById('show-cross-story').addEventListener('change', e => groups.crossStory.visible = e.target.checked);
+document.getElementById('show-extensions').addEventListener('change', e => groups.extensions.visible = e.target.checked);
+document.getElementById('show-overlaps').addEventListener('change', e => { groups.overlaps.visible = e.target.checked; loadBuilding(currentBuilding); });
+document.getElementById('show-wall-clips').addEventListener('change', e => { groups.wallClips.visible = e.target.checked; loadBuilding(currentBuilding); });
+document.getElementById('show-ext-gaps').addEventListener('change', e => groups.extGaps.visible = e.target.checked);
+document.getElementById('show-ceilings').addEventListener('change', e => { groups.ceilings.visible = e.target.checked; loadBuilding(currentBuilding); });
+document.getElementById('show-full-model').addEventListener('change', e => {
+  const on = e.target.checked;
+  groups.fullModel.visible = on;
+  // Hide individual layers when full model is on, restore when off
+  groups.computed.visible = !on && document.getElementById('show-computed').checked;
+  groups.extensions.visible = !on && document.getElementById('show-extensions').checked;
+  groups.gaps.visible = !on && document.getElementById('show-gaps').checked;
+  groups.extGaps.visible = !on && document.getElementById('show-ext-gaps').checked;
+  groups.overlaps.visible = !on && document.getElementById('show-overlaps').checked;
+});
 
 window.addEventListener('resize', resizeRenderer);
 
@@ -359,19 +652,26 @@ fetch('buildings_3d.json')
       const el = document.createElement('div');
       el.className = 'bldg-item';
       const addr = b.address || b.uuid.slice(0, 12);
-      const rawCount = b.rooms.reduce((s, r) => s + r.walls_raw.length, 0);
+      const computedCount = b.rooms.reduce((s, r) => s + r.walls_computed.length, 0);
+      const doorCount = b.rooms.reduce((s, r) => s + (r.doors || []).length, 0);
+      const windowCount = b.rooms.reduce((s, r) => s + (r.windows || []).length, 0);
       const cls = b.classification || 'UNKNOWN';
       const storiesClass = b.stories_found > 1 ? 'multi' : '';
       const gapCount = (b.cross_floor_gaps || []).length;
       const gapBadge = gapCount > 0 ? `<span style="color:#f84">${gapCount}gaps</span>` : '';
+      const extGapCount = (b.exterior_gap_indicators || []).length;
+      const extGapBadge = extGapCount > 0 ? `<span style="color:#f4f">${extGapCount}eg</span>` : '';
       el.innerHTML =
         `<div class="bldg-addr">${addr}</div>` +
         `<div class="bldg-meta">` +
           `<span class="tag tag-${cls}">${cls}</span>` +
           `<span class="stories-badge ${storiesClass}">${b.stories_found}F</span>` +
           `<span>${b.rooms.length}r</span>` +
-          `<span>${rawCount}w</span>` +
+          `<span>${computedCount}w</span>` +
+          `<span style="color:#c73">${doorCount}d</span>` +
+          `<span style="color:#3ad">${windowCount}w</span>` +
           gapBadge +
+          extGapBadge +
         `</div>`;
       el.dataset.search = `${addr} ${b.uuid} ${cls}`.toLowerCase();
       el.dataset.index = i;

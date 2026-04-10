@@ -8,7 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
-from shapely.geometry import MultiPolygon, Polygon
+from shapely.geometry import MultiPolygon, Point, Polygon
 from shapely.ops import unary_union
 from shapely.validation import make_valid
 
@@ -34,6 +34,72 @@ def wall_world_corners(wall):
     h = wall["dimensions"][1] / 2
     local = [[-w, -h, 0], [w, -h, 0], [w, h, 0], [-w, h, 0]]
     return [(T @ np.array([*c, 1.0]))[:3].tolist() for c in local]
+
+
+def clamp_opening_to_parent(opening_corners, parent_corners):
+    """Clamp door/window corners so they don't extend beyond their parent wall.
+
+    Projects both sets of corners onto the wall plane, computes the parent's
+    bounding box in 2D wall-local coordinates, clamps the opening corners,
+    then reprojects back to 3D.
+    """
+    if len(parent_corners) < 3 or len(opening_corners) < 3:
+        return opening_corners
+
+    parent = np.array(parent_corners)
+    opening = np.array(opening_corners)
+
+    # Compute wall plane basis vectors
+    # Use first two edges of parent wall to define the plane
+    e1 = parent[1] - parent[0]
+    e1_len = np.linalg.norm(e1)
+    if e1_len < 1e-9:
+        return opening_corners
+    e1_norm = e1 / e1_len
+
+    # Normal from cross product of first two edges
+    e2_raw = parent[2] - parent[1]
+    normal = np.cross(e1, e2_raw)
+    n_len = np.linalg.norm(normal)
+    if n_len < 1e-9:
+        return opening_corners
+    normal = normal / n_len
+
+    # Second basis vector perpendicular to e1 and normal
+    e2_norm = np.cross(normal, e1_norm)
+
+    # Origin = centroid of parent wall
+    origin = parent.mean(axis=0)
+
+    # Project parent corners to 2D
+    def to_2d(pts):
+        rel = pts - origin
+        return np.column_stack([rel @ e1_norm, rel @ e2_norm])
+
+    parent_2d = to_2d(parent)
+    opening_2d = to_2d(opening)
+
+    # Bounding box of parent in 2D
+    p_min = parent_2d.min(axis=0)
+    p_max = parent_2d.max(axis=0)
+
+    # Clamp opening corners to parent bounding box
+    clamped_2d = np.clip(opening_2d, p_min, p_max)
+
+    if np.allclose(clamped_2d, opening_2d, atol=1e-6):
+        return opening_corners  # No clamping needed
+
+    # Reproject to 3D: keep original depth (distance along normal)
+    result = []
+    for i in range(len(opening_corners)):
+        # Depth along normal from origin
+        rel = opening[i] - origin
+        depth = rel @ normal
+        # Reconstruct 3D point from clamped 2D + original depth
+        pt = origin + clamped_2d[i, 0] * e1_norm + clamped_2d[i, 1] * e2_norm + depth * normal
+        result.append(pt.tolist())
+
+    return result
 
 
 def hybrid_wall_corners(merged_wall, raw_wall, floor_y=None):
@@ -210,122 +276,1534 @@ def _decompose_polys(geom):
     return [g for g in getattr(geom, "geoms", []) if isinstance(g, Polygon)]
 
 
-def _compute_cross_floor_gaps(rooms_out):
-    """Detect cross-floor gaps using convex-hull concavity approach.
+def _element_xz_midpoint(corners):
+    """Return (x, z) midpoint of a wall/door/window from its 3D corners."""
+    if not corners or len(corners) < 2:
+        return None
+    x = np.mean([c[0] for c in corners])
+    z = np.mean([c[2] for c in corners])
+    return (x, z)
 
-    For each story:
-    1. Compute convex hull minus footprint → concavity regions
-    2. Check which concavities are filled by other floors
-    3. Concavities filled by other floors are likely scanning gaps
+
+def _elements_in_overlap(elements, overlap_poly, buffer=0.15):
+    """Split elements into (inside_overlap, outside_overlap) based on XZ midpoint."""
+    buffered = overlap_poly.buffer(buffer)
+    inside, outside = [], []
+    for el in elements:
+        mid = _element_xz_midpoint(el.get("corners", []))
+        if mid and buffered.contains(Point(mid)):
+            inside.append(el)
+        else:
+            outside.append(el)
+    return inside, outside
+
+
+def _wall_xz_normal(corners):
+    """Compute the XZ-plane normal of a wall from its corners."""
+    if len(corners) < 2:
+        return None
+    dx = corners[1][0] - corners[0][0]
+    dz = corners[1][2] - corners[0][2]
+    length = math.hypot(dx, dz)
+    if length < 1e-6:
+        return None
+    return (-dz / length, dx / length)
+
+
+def _is_wall_covered_by_winner(wall, winner_walls, max_dist=0.5, max_angle_deg=30.0):
+    """Check if a wall has a nearby parallel wall in the winning room.
+
+    A wall is "covered" if the winning room has a wall that is close
+    (XZ midpoint distance < max_dist) and roughly parallel (angle < max_angle_deg).
+    Covered walls are shared internal walls; uncovered walls are likely external.
     """
-    story_rooms = defaultdict(list)
-    story_floor_ys = defaultdict(list)
+    corners = wall.get("corners", [])
+    if len(corners) < 2:
+        return True  # can't determine, assume covered
+
+    mid = _element_xz_midpoint(corners)
+    normal = _wall_xz_normal(corners)
+    if mid is None or normal is None:
+        return True
+
+    for w in winner_walls:
+        wc = w.get("corners", [])
+        if len(wc) < 2:
+            continue
+        w_mid = _element_xz_midpoint(wc)
+        w_normal = _wall_xz_normal(wc)
+        if w_mid is None or w_normal is None:
+            continue
+
+        dist = math.hypot(mid[0] - w_mid[0], mid[1] - w_mid[1])
+        if dist > max_dist:
+            continue
+
+        dot = abs(normal[0] * w_normal[0] + normal[1] * w_normal[1])
+        dot = min(dot, 1.0)
+        angle_deg = math.degrees(math.acos(dot))
+        if angle_deg <= max_angle_deg:
+            return True
+
+    return False
+
+
+def _clip_floor_overlaps(rooms_out):
+    """Clip overlapping floor polygons within each story. Larger rooms win.
+
+    Also removes walls in the overlap zone from the clipped room, and
+    transfers any doors/windows from those walls to the winning room so
+    openings are preserved.
+    """
+    MIN_OVERLAP = 0.01  # m² – skip sliver overlaps
+    MAX_HALF_FLOOR = 0.50  # rooms with floor Y this far from story median are half-floors
+
+    # Collect all rooms with valid floor polygons
+    story_entries_raw = defaultdict(list)
+    for ri, room in enumerate(rooms_out):
+        poly = _floor_polygon_to_shapely(room["floor_polygon"])
+        if poly and poly.area > 0.01:
+            ys = [c[1] for c in room["floor_polygon"]]
+            floor_y = float(np.mean(ys))
+            story_entries_raw[room["story"]].append((ri, poly, poly.area, floor_y))
+
+    # Filter out half-floor rooms (stairwell landings, mezzanines)
+    story_entries = defaultdict(list)
+    for story, entries in story_entries_raw.items():
+        if len(entries) < 2:
+            continue
+        median_y = float(np.median([fy for _, _, _, fy in entries]))
+        for ri, poly, area, floor_y in entries:
+            if abs(floor_y - median_y) <= MAX_HALF_FLOOR:
+                story_entries[story].append((ri, poly, area, floor_y))
+
+    metrics = []
+    # Track claim order so we can find the winning room for door/window transfer
+    story_claim_order = defaultdict(list)  # story -> [(room_index, poly)]
+
+    for story, entries in story_entries.items():
+        entries.sort(key=lambda e: e[2], reverse=True)  # largest first
+        claimed = None
+
+        for ri, poly, orig_area, floor_y in entries:
+            if claimed is None:
+                claimed = poly
+                story_claim_order[story].append((ri, poly))
+                continue
+
+            overlap = poly.intersection(claimed)
+            if overlap.area < MIN_OVERLAP:
+                claimed = make_valid(unary_union([claimed, poly]))
+                story_claim_order[story].append((ri, poly))
+                continue
+
+            clipped = make_valid(poly.difference(claimed))
+
+            # If clipping produced MultiPolygon, take the largest component
+            parts = _decompose_polys(clipped)
+            if len(parts) > 1:
+                clipped = max(parts, key=lambda p: p.area)
+            elif len(parts) == 1:
+                clipped = parts[0]
+            else:
+                clipped = Polygon()
+
+            # --- Remove walls in the overlap zone from the clipped room ---
+            # Only remove walls that are "covered" by a wall in the winning
+            # room (shared internal walls).  External walls that have no
+            # nearby parallel counterpart in the winner are kept.
+            overlap_for_test = make_valid(unary_union(_decompose_polys(overlap)))
+
+            candidate_removed_walls, kept_walls = _elements_in_overlap(
+                rooms_out[ri]["walls_computed"], overlap_for_test
+            )
+            removed_doors, kept_doors = _elements_in_overlap(
+                rooms_out[ri].get("doors", []), overlap_for_test
+            )
+            removed_windows, kept_windows = _elements_in_overlap(
+                rooms_out[ri].get("windows", []), overlap_for_test
+            )
+
+            # Collect all walls from winning rooms that overlap this region
+            winner_walls = []
+            for winner_ri, winner_poly in story_claim_order[story]:
+                if winner_poly.intersects(overlap_for_test):
+                    winner_walls.extend(rooms_out[winner_ri]["walls_computed"])
+
+            # Keep external walls (not covered by any winner wall)
+            removed_walls = []
+            for w in candidate_removed_walls:
+                if _is_wall_covered_by_winner(w, winner_walls):
+                    removed_walls.append(w)
+                else:
+                    kept_walls.append(w)
+
+            rooms_out[ri]["walls_computed"] = kept_walls
+            rooms_out[ri]["walls_removed_overlap"] = removed_walls
+            rooms_out[ri]["doors"] = kept_doors
+            rooms_out[ri]["windows"] = kept_windows
+
+            # Transfer doors/windows to the winning room that owns the overlap
+            if removed_doors or removed_windows:
+                for winner_ri, winner_poly in story_claim_order[story]:
+                    if not winner_poly.intersects(overlap_for_test):
+                        continue
+                    winner = rooms_out[winner_ri]
+                    for d in removed_doors:
+                        mid = _element_xz_midpoint(d.get("corners", []))
+                        if mid and winner_poly.buffer(0.15).contains(Point(mid)):
+                            existing = {x["id"] for x in winner.get("doors", [])}
+                            if d["id"] not in existing:
+                                winner.setdefault("doors", []).append(d)
+                    for w in removed_windows:
+                        mid = _element_xz_midpoint(w.get("corners", []))
+                        if mid and winner_poly.buffer(0.15).contains(Point(mid)):
+                            existing = {x["id"] for x in winner.get("windows", [])}
+                            if w["id"] not in existing:
+                                winner.setdefault("windows", []).append(w)
+
+            metrics.append({
+                "room_index": ri,
+                "story": story,
+                "original_area_m2": round(orig_area, 3),
+                "clipped_area_m2": round(clipped.area, 3),
+                "overlap_area_m2": round(overlap.area, 3),
+                "walls_removed": len(removed_walls),
+                "doors_transferred": len(removed_doors),
+                "windows_transferred": len(removed_windows),
+            })
+
+            # Store original for viewer ghost
+            rooms_out[ri]["floor_polygon_original"] = list(rooms_out[ri]["floor_polygon"])
+
+            if clipped.area > MIN_OVERLAP:
+                coords_2d = list(clipped.exterior.coords)[:-1]
+                rooms_out[ri]["floor_polygon"] = [[c[0], floor_y, c[1]] for c in coords_2d]
+                rooms_out[ri]["floor_clipped"] = True
+
+                # Overlap region for visualization
+                overlap_parts = _decompose_polys(overlap)
+                if overlap_parts:
+                    biggest_overlap = max(overlap_parts, key=lambda p: p.area)
+                    oc = list(biggest_overlap.exterior.coords)[:-1]
+                    rooms_out[ri]["floor_overlap_region"] = [[c[0], floor_y, c[1]] for c in oc]
+            else:
+                rooms_out[ri]["floor_polygon"] = []
+                rooms_out[ri]["floor_clipped"] = True
+
+            if clipped.area > MIN_OVERLAP:
+                claimed = make_valid(unary_union([claimed, clipped]))
+            story_claim_order[story].append(
+                (ri, clipped if clipped.area > MIN_OVERLAP else Polygon())
+            )
+
+    return metrics
+
+
+def _clip_walls_to_story_bounds(rooms_out, story_y_map):
+    """Clip wall quads to their story's Y range so staircase walls don't overlap.
+
+    Skips half-floor rooms (stairwell landings, mezzanines) whose floor Y
+    deviates more than 0.50m from the story median.
+
+    Detects split-level houses where inter-story gaps are much smaller than
+    actual wall heights, and skips ceiling clipping for those stories.
+    """
+    TOP_EPSILON = 0.05   # allow walls to touch slab within 5 cm
+    BOTTOM_TOL = 0.30    # allow 30 cm below floor (baseboard/foundation)
+    MAX_HALF_FLOOR = 0.50
+    MIN_STORY_RATIO = 0.75  # ceiling gap must be >= 75% of median wall height
+
+    sorted_stories = sorted(story_y_map.keys())
+
+    # Compute median wall height per story to detect split-level situations
+    story_wall_heights = defaultdict(list)
+    for room in rooms_out:
+        for w in room.get("walls_computed", []):
+            corners = w.get("corners", [])
+            if len(corners) >= 3:
+                ys = [c[1] for c in corners]
+                h = max(ys) - min(ys)
+                if h > 0.1:
+                    story_wall_heights[room["story"]].append(h)
+
+    story_median_wall_h = {}
+    for story, heights in story_wall_heights.items():
+        if heights:
+            story_median_wall_h[story] = float(np.median(heights))
+
+    story_bounds = {}
+    for i, story in enumerate(sorted_stories):
+        y_floor = story_y_map[story]
+        y_ceiling = story_y_map[sorted_stories[i + 1]] if i + 1 < len(sorted_stories) else None
+
+        # Split-level detection: if the gap to the next story is much smaller
+        # than the actual wall heights, skip that ceiling (look further up)
+        if y_ceiling is not None and story in story_median_wall_h:
+            gap = y_ceiling - y_floor
+            median_h = story_median_wall_h[story]
+            if gap < MIN_STORY_RATIO * median_h:
+                # Try the story after next
+                y_ceiling = None
+                for j in range(i + 2, len(sorted_stories)):
+                    candidate = story_y_map[sorted_stories[j]]
+                    if (candidate - y_floor) >= MIN_STORY_RATIO * median_h:
+                        y_ceiling = candidate
+                        break
+
+        story_bounds[story] = (y_floor, y_ceiling)
+
+    walls_clipped = 0
+    walls_checked = 0
+
+    for room in rooms_out:
+        story = room["story"]
+        if story not in story_bounds:
+            continue
+
+        # Skip half-floor rooms (stairwell landings, mezzanines)
+        fp = room["floor_polygon"]
+        if fp and len(fp) >= 3:
+            room_floor_y = float(np.mean([c[1] for c in fp]))
+            if abs(room_floor_y - story_y_map[story]) > MAX_HALF_FLOOR:
+                continue
+
+        y_floor, y_ceiling = story_bounds[story]
+
+        for w in room["walls_computed"]:
+            walls_checked += 1
+            corners = w["corners"]
+            if len(corners) < 3:
+                continue
+
+            ys = [c[1] for c in corners]
+            wall_min_y = min(ys)
+            wall_max_y = max(ys)
+
+            need_clip = False
+            # Check top
+            if y_ceiling is not None and wall_max_y > y_ceiling + TOP_EPSILON:
+                need_clip = True
+            # Check bottom
+            if wall_min_y < y_floor - BOTTOM_TOL:
+                need_clip = True
+
+            if not need_clip:
+                continue
+
+            new_corners = [list(c) for c in corners]
+
+            if y_ceiling is not None:
+                for c in new_corners:
+                    if c[1] > y_ceiling:
+                        c[1] = y_ceiling
+
+            if wall_min_y < y_floor - BOTTOM_TOL:
+                for c in new_corners:
+                    if c[1] < y_floor:
+                        c[1] = y_floor
+
+            w["corners_original"] = corners
+            w["corners"] = new_corners
+            w["wall_clipped"] = True
+            walls_clipped += 1
+
+    return {"walls_clipped": walls_clipped, "walls_checked": walls_checked}
+
+
+def _compute_cross_floor_gaps(rooms_out):
+    """Detect gaps between floor polygons: within-story and cross-story.
+
+    Phase 1: Morphological close → enclosed voids within a story
+    Phase 2: Pairwise buffer-intersect → strips between adjacent rooms (clipped to footprint)
+    Phase 3: Cross-story differences → areas covered by other floors but not this one
+             (closets, thick walls, scanning differences)
+    """
+    from shapely import STRtree
+
+    WALL_HALF = 0.20   # half-wall buffer for morphological close (Phase 1)
+    PAIR_HALF = 0.50   # half-wall buffer for pairwise intersect (Phase 2)
+    MAX_GAP = 1.00     # max gap width for pairwise check
+    MIN_AREA = 0.005   # minimum gap area in m²
+    MAX_HALF_FLOOR = 0.50  # max floor Y deviation from story median before
+                           # treating a room as a half-floor (mezzanine/stairwell)
+
+    story_rooms_raw = defaultdict(list)  # story -> [(poly, floor_y)]
 
     for ri, room in enumerate(rooms_out):
         story = room["story"]
         poly = _floor_polygon_to_shapely(room["floor_polygon"])
-        if poly is not None:
-            story_rooms[story].append((ri, poly))
+        if poly is not None and poly.is_valid and poly.area > 0.01:
             ys = [c[1] for c in room["floor_polygon"]]
-            story_floor_ys[story].append(np.mean(ys))
+            story_rooms_raw[story].append((poly, float(np.mean(ys))))
 
-    if len(story_rooms) < 2:
-        return []
+    # Filter out half-floor rooms (floor Y far from story median)
+    story_rooms = defaultdict(list)
+    story_floor_ys = defaultdict(list)
+    for story, entries in story_rooms_raw.items():
+        floor_ys_all = [fy for _, fy in entries]
+        median_y = float(np.median(floor_ys_all))
+        for poly, fy in entries:
+            if abs(fy - median_y) <= MAX_HALF_FLOOR:
+                story_rooms[story].append(poly)
+                story_floor_ys[story].append(fy)
 
     # Build per-story footprints
     story_footprints = {}
     story_y_map = {}
-    for story, room_polys in sorted(story_rooms.items()):
-        polys = [p for _, p in room_polys]
-        union = unary_union(polys)
-        footprint = union.buffer(0.02).buffer(-0.02)
-        footprint = make_valid(footprint)
-        polys_out = _decompose_polys(footprint)
-        fp = max(polys_out, key=lambda g: g.area) if polys_out else None
-        if fp and fp.area > 0.01:
+    for story, polys in sorted(story_rooms.items()):
+        fp = make_valid(unary_union(polys))
+        if fp.area > 0.01:
             story_footprints[story] = fp
             story_y_map[story] = float(np.mean(story_floor_ys[story]))
 
-    if len(story_footprints) < 2:
-        return []
-
     gaps = []
 
-    for story, footprint in story_footprints.items():
-        # Find concavities: convex hull minus footprint
-        hull = footprint.convex_hull
-        diff = make_valid(hull.difference(footprint))
-        concavities = [r for r in _decompose_polys(diff) if r.area >= 0.1]
-
-        for region in concavities:
-            # Check which other floor best fills this concavity
-            best_story, best_fill = -1, 0.0
-            for s, fp in story_footprints.items():
-                if s == story:
-                    continue
+    def _emit_gaps(regions, story, floor_y, gap_type, clip_to=None):
+        for region in regions:
+            if clip_to is not None:
                 try:
-                    inter = region.intersection(fp)
-                    fill = inter.area / region.area if region.area > 0 else 0
+                    region = make_valid(region.intersection(clip_to))
                 except Exception:
-                    fill = 0
-                if fill > best_fill:
-                    best_story, best_fill = s, fill
+                    continue
+            for part in _decompose_polys(region):
+                if part.area < MIN_AREA:
+                    continue
+                area = part.area
+                compactness = 4 * math.pi * area / (part.length ** 2) if part.length > 0 else 0
+                if compactness < 0.15:
+                    confidence = "high"
+                elif compactness < 0.3:
+                    confidence = "medium"
+                else:
+                    confidence = "low"
+                coords_2d = list(part.exterior.coords)
+                corners_3d = [[c[0], floor_y, c[1]] for c in coords_2d]
+                centroid = part.centroid
+                gaps.append({
+                    "story": story,
+                    "type": gap_type,
+                    "corners": corners_3d,
+                    "area_m2": round(area, 3),
+                    "compactness": round(compactness, 3),
+                    "confidence": confidence,
+                    "centroid": [round(centroid.x, 3), floor_y, round(centroid.y, 3)],
+                })
 
-            # Only report if another floor fills >30%
-            if best_fill < 0.3:
-                continue
+    for story, polys in sorted(story_rooms.items()):
+        if len(polys) < 2:
+            continue
 
-            area = region.area
-            compactness = 4 * math.pi * area / (region.length ** 2) if region.length > 0 else 0
+        footprint = story_footprints[story]
+        floor_y = story_y_map[story]
+        all_gap_parts = []
 
-            # Scoring
-            fill_score = min(best_fill / 0.8, 1.0)
-            area_score = max(0.1, 1.0 - area / 6.0) if area < 8 else 0.1
-            compact_score = 1.0 - min(compactness / 0.4, 1.0)
+        # Phase 1: Morphological close → enclosed voids (tight buffer)
+        closed = make_valid(footprint.buffer(WALL_HALF, join_style=2).buffer(-WALL_HALF, join_style=2))
+        morph_gaps = make_valid(closed.difference(footprint))
+        all_gap_parts.extend(_decompose_polys(morph_gaps))
 
-            other = [s for s in story_footprints if s != story]
-            if other:
-                filling = sum(
-                    1 for s in other
-                    if story_footprints[s].intersection(region).area > area * 0.5
-                )
-                agreement = filling / len(other)
-            else:
-                agreement = fill_score
+        for poly_part in _decompose_polys(closed):
+            for interior in poly_part.interiors:
+                hole = Polygon(interior)
+                if hole.is_valid and hole.area > MIN_AREA:
+                    all_gap_parts.append(hole)
 
-            score = 0.35 * fill_score + 0.20 * area_score + 0.15 * compact_score + 0.30 * agreement
+        # Phase 2: Pairwise buffer-intersect for adjacent room gaps (wider buffer)
+        tree = STRtree(polys)
+        buffered = [p.buffer(PAIR_HALF, join_style=2) for p in polys]  # mitre join: square corners, no rounded bulges
+        pair_gap_parts = []
+        seen_pairs = set()
 
-            if score >= 0.6:
-                confidence = "high"
-            elif score >= 0.35:
-                confidence = "medium"
-            else:
-                confidence = "low"
+        for i, poly_i in enumerate(polys):
+            candidates = tree.query(buffered[i])
+            for j in candidates:
+                if j <= i:
+                    continue
+                pair_key = (i, j)
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
 
-            centroid = region.centroid
-            floor_y = story_y_map.get(story, 0)
-            coords_2d = list(region.exterior.coords)
-            corners_3d = [[c[0], floor_y, c[1]] for c in coords_2d]
+                if polys[i].distance(polys[j]) > MAX_GAP:
+                    continue
 
+                try:
+                    intersection = buffered[i].intersection(buffered[j])
+                    gap = make_valid(intersection.difference(footprint))
+                    pair_gap_parts.extend(_decompose_polys(gap))
+                except Exception:
+                    continue
+
+        # Wider clipping envelope for pairwise gaps (they may extend beyond
+        # the tight morphological close)
+        wide_closed = make_valid(footprint.buffer(PAIR_HALF, join_style=2).buffer(-PAIR_HALF, join_style=2))
+
+        # Emit Phase 1 gaps clipped to tight envelope
+        if all_gap_parts:
+            merged = make_valid(unary_union(all_gap_parts))
+            _emit_gaps(_decompose_polys(merged), story, floor_y, "within_story", clip_to=closed)
+
+        # Emit Phase 2 gaps clipped to wider envelope, excluding Phase 1 areas
+        if pair_gap_parts:
+            pair_merged = make_valid(unary_union(pair_gap_parts))
+            # Remove anything already covered by Phase 1
+            if all_gap_parts:
+                try:
+                    pair_merged = make_valid(pair_merged.difference(unary_union(all_gap_parts)))
+                except Exception:
+                    pass
+            _emit_gaps(_decompose_polys(pair_merged), story, floor_y, "within_story", clip_to=wide_closed)
+
+    # Phase 3: Cross-story differences
+    # For each story, areas covered by ANY other story but NOT this one
+    sorted_stories = sorted(story_footprints.keys())
+    if len(sorted_stories) >= 2:
+        all_footprints = [story_footprints[s] for s in sorted_stories]
+        full_envelope = make_valid(unary_union(all_footprints))
+
+        for story in sorted_stories:
+            fp = story_footprints[story]
+            floor_y = story_y_map[story]
             try:
-                shared_fp = region.boundary.intersection(footprint.exterior)
-                contact = shared_fp.length / region.boundary.length if not shared_fp.is_empty else 0
+                missing = make_valid(full_envelope.difference(fp))
             except Exception:
-                contact = 0
-
-            gaps.append({
-                "story": story,
-                "reference_story": best_story,
-                "corners": corners_3d,
-                "area_m2": round(area, 3),
-                "compactness": round(compactness, 3),
-                "perimeter_contact_pct": round(contact, 3),
-                "confidence": confidence,
-                "confidence_score": round(score, 2),
-                "centroid": [round(centroid.x, 3), floor_y, round(centroid.y, 3)],
-            })
+                continue
+            _emit_gaps(_decompose_polys(missing), story, floor_y, "cross_story")
 
     return gaps
+
+
+def _compute_gap_walls(gaps, rooms_out, story_y_map, gap_closures=None):
+    """Create wall quads along each edge of cross-floor gap polygons.
+
+    Per-vertex Y interpolation from nearest wall edges, with filters:
+    - Only walls with height >= 0.5m (skip slabs/ceilings)
+    - Only walls whose bottom Y is within 0.75m of the gap's floor Y
+    - Includes wall extensions and exterior gap closures as wall sources
+    """
+    DEFAULT_WALL_HEIGHT = 2.50
+    MIN_WALL_HEIGHT = 0.5
+    MAX_SNAP_DIST = 1.0
+    MAX_Y_DIST = 0.75
+
+    def _add_wall_edge(story, wc):
+        """Add a wall polygon (4+ corners) to the story_walls index.
+
+        Uses corners[0]→corners[1] as the bottom edge (standard RoomPlan
+        ordering: BL, BR, ...).  Identifies top corners by Y-midpoint
+        and builds a top contour profile parameterised by t along the
+        bottom edge, so pentagonal/slanted walls contribute their ridge.
+        """
+        if len(wc) < 4:
+            return
+        ys = [c[1] for c in wc]
+        h = max(ys) - min(ys)
+        if h < MIN_WALL_HEIGHT:
+            return
+        # Bottom edge from first two corners (BL→BR in RoomPlan convention)
+        p0_xz = np.array([wc[0][0], wc[0][2]])
+        p1_xz = np.array([wc[1][0], wc[1][2]])
+        edge = p1_xz - p0_xz
+        elen = np.linalg.norm(edge)
+        if elen < 1e-6:
+            return
+        ybot_avg = (wc[0][1] + wc[1][1]) / 2
+        # Top corners: everything above the Y-midpoint
+        mid_y = (max(ys) + min(ys)) / 2.0
+        top_cs = [c for c in wc if c[1] > mid_y - 0.01]
+        if len(top_cs) < 2:
+            # Fallback: use corners[2] and corners[3] as flat top
+            top_cs = [wc[3], wc[2]]
+        # Build top-contour profile: list of (t, y) pairs sorted by t
+        top_profile = []
+        for c in top_cs:
+            cxz = np.array([c[0], c[2]])
+            t = float(np.clip(np.dot(cxz - p0_xz, edge) / (elen ** 2), 0, 1))
+            top_profile.append((t, c[1]))
+        top_profile.sort(key=lambda p: p[0])
+        story_walls[story].append((wc, p0_xz, edge, elen, ybot_avg, top_profile))
+
+    # Collect wall edges per story, using extended top Y when wall has extensions
+    story_walls = defaultdict(list)
+    for room in rooms_out:
+        story = room["story"]
+        for w in room["walls_computed"]:
+            wc = w["corners"]
+            if len(wc) < 4:
+                continue
+            # Build effective corners: include wall extensions (raised top to slab)
+            ext = w.get("extension_strip")
+            if ext and len(ext) >= 1:
+                # ext is a list of quads; find max Y across all quad corners
+                ext_top_y = max(c[1] for quad in ext for c in quad)
+                ec = [list(c) for c in wc]
+                ys = [c[1] for c in wc]
+                mid_y = (max(ys) + min(ys)) / 2.0
+                # Raise all top corners to ext_top_y
+                for i, c in enumerate(ec):
+                    if c[1] > mid_y - 0.01:
+                        ec[i] = [c[0], ext_top_y, c[2]]
+            else:
+                ec = wc
+            _add_wall_edge(story, ec)
+
+    # Include exterior gap closure side walls as wall sources
+    for gc in (gap_closures or []):
+        if gc.get("type") == "side" and len(gc.get("corners", [])) >= 4:
+            _add_wall_edge(gc["story"], gc["corners"])
+
+    # Fallback ceiling Y per story
+    sorted_stories = sorted(story_y_map.keys())
+    ceiling_y_map = {}
+    for i, story in enumerate(sorted_stories):
+        if i + 1 < len(sorted_stories):
+            ceiling_y_map[story] = story_y_map[sorted_stories[i + 1]]
+        else:
+            heights = []
+            for wc, _, _, _, _, _ in story_walls.get(story, []):
+                ys = [c[1] for c in wc]
+                heights.append(max(ys) - min(ys))
+            median_h = float(np.median(heights)) if heights else DEFAULT_WALL_HEIGHT
+            ceiling_y_map[story] = story_y_map[story] + median_h
+
+    def _interp_top_profile(top_profile, t):
+        """Interpolate Y along a wall's top contour at parameter t."""
+        if len(top_profile) == 1:
+            return top_profile[0][1]
+        # Clamp to profile range
+        if t <= top_profile[0][0]:
+            return top_profile[0][1]
+        if t >= top_profile[-1][0]:
+            return top_profile[-1][1]
+        # Find bracketing segment
+        for k in range(len(top_profile) - 1):
+            t0, y0 = top_profile[k]
+            t1, y1 = top_profile[k + 1]
+            if t0 <= t <= t1:
+                frac = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
+                return y0 + frac * (y1 - y0)
+        return top_profile[-1][1]
+
+    def _snap_vertex_y(xz_pt, story, floor_y):
+        """Find nearest wall edge on this floor and interpolate bottom/top Y.
+
+        Uses the full top-contour profile so pentagonal/slanted walls
+        contribute their ridge height at the correct parametric position.
+        """
+        fallback_top = ceiling_y_map.get(story, floor_y + DEFAULT_WALL_HEIGHT)
+        best_dist = MAX_SNAP_DIST
+        best_ybot = floor_y
+        best_ytop = fallback_top
+
+        for wc, p0_xz, edge, elen, ybot_avg, top_profile in story_walls.get(story, []):
+            # Only walls on this floor level
+            if abs(ybot_avg - floor_y) > MAX_Y_DIST:
+                continue
+            t = float(np.clip(np.dot(xz_pt - p0_xz, edge) / (elen ** 2), 0, 1))
+            proj = p0_xz + t * edge
+            dist = float(np.linalg.norm(xz_pt - proj))
+            if dist < best_dist:
+                best_dist = dist
+                best_ybot = float(ybot_avg)
+                best_ytop = _interp_top_profile(top_profile, t)
+
+        return best_ybot, best_ytop
+
+    walls = []
+    for gap in gaps:
+        if gap["type"] != "within_story":
+            continue
+        corners_3d = gap["corners"]
+        if len(corners_3d) < 3:
+            continue
+        story = gap["story"]
+        floor_y = corners_3d[0][1]
+
+        # Pre-compute Y values for each vertex from nearest adjacent walls
+        vertex_ys = []
+        for c in corners_3d:
+            xz = np.array([c[0], c[2]])
+            ybot, ytop = _snap_vertex_y(xz, story, floor_y)
+            vertex_ys.append((ybot, ytop))
+
+        # Use a consistent floor Y (max of per-vertex bottoms) so the
+        # base stays level, but let the top follow adjacent wall heights.
+        gap_floor_y = max(yb for yb, _ in vertex_ys)
+
+        # Raise the gap floor polygon to match
+        for c in corners_3d:
+            c[1] = gap_floor_y
+        gap["centroid"][1] = gap_floor_y
+
+        # Walk edges of the gap polygon, using per-vertex ceiling heights
+        # so gap walls follow the slope/height of adjacent walls
+        n = len(corners_3d)
+        edge_count = n - 1 if corners_3d[0] == corners_3d[-1] else n
+        for ei in range(edge_count):
+            j = (ei + 1) % n
+            c0 = corners_3d[ei]
+            c1 = corners_3d[j]
+            _, ytop0 = vertex_ys[ei]
+            _, ytop1 = vertex_ys[j]
+            walls.append({
+                "corners": [
+                    [c0[0], gap_floor_y, c0[2]],  # BL
+                    [c1[0], gap_floor_y, c1[2]],  # BR
+                    [c1[0], ytop1,       c1[2]],  # TR
+                    [c0[0], ytop0,       c0[2]],  # TL
+                ],
+                "type": gap["type"],
+                "story": story,
+                "confidence": gap["confidence"],
+            })
+
+    return walls
+
+
+def _extend_wall_to_slab(corners, slab_y_above, epsilon=0.05, max_gap=0.80):
+    """Extend wall top corners upward to reach slab_y_above.
+
+    Identifies top vs bottom corners by Y value (not index), since RoomPlan
+    polygon winding order varies depending on wall orientation. The top half
+    of corners (by Y) are the ones that get extended to the slab.
+
+    For slanted walls (flat-slant-flat), some top corners may already reach
+    the slab while others don't — only the ones below get raised.
+
+    Returns dict with extension_strip, or None if no extension is needed.
+    """
+    if len(corners) < 3:
+        return None
+
+    ys = [c[1] for c in corners]
+    max_y = max(ys)
+    min_y = min(ys)
+    wall_height = max_y - min_y
+    if wall_height < 0.1:
+        return None  # degenerate wall
+
+    # Identify top corners: those in the upper half of the wall's Y range
+    # Use a threshold at 60% of the height from bottom to catch slanted
+    # corners that dip slightly below mid-height
+    y_thresh = min_y + wall_height * 0.4
+    top_indices = [i for i, y in enumerate(ys) if y > y_thresh]
+    if not top_indices:
+        return None
+
+    # Find which top corners actually need extending (below slab - epsilon)
+    need_ext = [i for i in top_indices if ys[i] < slab_y_above - epsilon]
+    if not need_ext:
+        return None  # all top corners already reach the slab
+
+    # Half-floor check: if even the highest top corner is >max_gap below slab
+    max_top_y = max(ys[i] for i in top_indices)
+    if slab_y_above - max_top_y > max_gap:
+        return None
+
+    # Sort top indices by polygon order for proper strip winding
+    top_indices_sorted = sorted(top_indices)
+
+    # Extended corners: copy, raise only those top corners below the slab
+    extended = [list(c) for c in corners]
+    need_ext_set = set(need_ext)
+    for i in need_ext:
+        extended[i][1] = slab_y_above
+
+    # Build extension as a list of quads between consecutive top corner pairs.
+    # Each quad is planar, avoiding rendering issues with non-planar polygons
+    # on walls with non-even tops (slanted, flat-slant-flat, etc.)
+    extension_strips = []
+    for k in range(len(top_indices_sorted) - 1):
+        i0 = top_indices_sorted[k]
+        i1 = top_indices_sorted[k + 1]
+        orig_y0 = corners[i0][1]
+        orig_y1 = corners[i1][1]
+        ext_y0 = slab_y_above if i0 in need_ext_set else orig_y0
+        ext_y1 = slab_y_above if i1 in need_ext_set else orig_y1
+        # Skip if both corners are already at slab (no area)
+        if abs(ext_y0 - orig_y0) < 1e-4 and abs(ext_y1 - orig_y1) < 1e-4:
+            continue
+        quad = [
+            [corners[i0][0], orig_y0, corners[i0][2]],
+            [corners[i1][0], orig_y1, corners[i1][2]],
+            [corners[i1][0], ext_y1,  corners[i1][2]],
+            [corners[i0][0], ext_y0,  corners[i0][2]],
+        ]
+        extension_strips.append(quad)
+
+    if not extension_strips:
+        return None
+
+    return {
+        "extended_corners": extended,
+        "extension_strip": extension_strips,
+    }
+
+
+def _infer_ceilings(rooms_out):
+    """Infer ceiling polygons by chaining wall top edges around each room.
+
+    For each wall in a room, its top corners define the ceiling surface along
+    that wall.  Slanted walls (pentagons) contribute 3+ top corners with
+    varying Y, flat walls contribute 2 corners at constant Y.  Chaining these
+    in floor-polygon order produces the ceiling contour.
+
+    Only emits ceilings for rooms that have at least one slanted wall segment.
+    """
+    SLANT_THRESH = 0.15   # min top-edge Y range to count as slanted (m)
+    SLOPE_THRESH = 0.15   # flat vs sloped ceiling classification (m)
+    XZ_MATCH_TOL = 0.20   # tolerance for matching wall bot corners to fp verts (m)
+
+    if not rooms_out:
+        return
+
+    for room in rooms_out:
+        fp = room.get("floor_polygon", [])
+        walls = room.get("walls_computed") or room.get("walls_merged", [])
+        if len(fp) < 3 or not walls:
+            continue
+
+        # Check if room has any slanted walls
+        has_slant = False
+        for w in walls:
+            corners = w["corners"]
+            if len(corners) < 3:
+                continue
+            ys = [c[1] for c in corners]
+            mid_y = (max(ys) + min(ys)) / 2.0
+            top_cs = [c for c in corners if c[1] > mid_y - 0.01]
+            if len(top_cs) >= 2:
+                top_range = max(c[1] for c in top_cs) - min(c[1] for c in top_cs)
+                if top_range > SLANT_THRESH:
+                    has_slant = True
+                    break
+
+        if not has_slant:
+            continue
+
+        # Build ceiling by chaining wall top edges in floor-polygon order
+        ceiling_polygon = _build_ceiling_from_wall_tops(
+            fp, walls, XZ_MATCH_TOL)
+
+        if ceiling_polygon is None or len(ceiling_polygon) < 3:
+            continue
+
+        ceiling_ys = [p[1] for p in ceiling_polygon]
+        y_range_ceil = max(ceiling_ys) - min(ceiling_ys)
+        ceiling_type = "flat" if y_range_ceil < SLOPE_THRESH else "sloped"
+
+        room["ceiling_polygon"] = ceiling_polygon
+        room["ceiling_type"] = ceiling_type
+        room["ceiling_ridge_height"] = round(max(ceiling_ys), 4)
+        room["ceiling_eave_height"] = round(min(ceiling_ys), 4)
+
+
+def _build_ceiling_from_wall_tops(fp, walls, xz_tol):
+    """Chain wall top edges in floor-polygon order to build ceiling polygon.
+
+    For each floor polygon edge, find the wall whose bottom corners match,
+    then emit that wall's top corners in the correct direction.
+    """
+    n = len(fp)
+
+    # Pre-compute wall info: bottom corners, top corners
+    wall_info = []
+    for w in walls:
+        corners = w["corners"]
+        if len(corners) < 3:
+            continue
+        ys = [c[1] for c in corners]
+        mid_y = (max(ys) + min(ys)) / 2.0
+        bot_corners = [c for c in corners if c[1] <= mid_y + 0.01]
+        top_corners = [c for c in corners if c[1] > mid_y - 0.01]
+        if len(bot_corners) < 2 or len(top_corners) < 2:
+            continue
+        wall_info.append({"bot": bot_corners, "top": top_corners})
+
+    if not wall_info:
+        return None
+
+    def xz_dist(a, b):
+        return math.hypot(a[0] - b[0], a[2] - b[2])
+
+    def find_nearest_bot(corner, bot_list):
+        best_d, best_c = float("inf"), None
+        for bc in bot_list:
+            d = xz_dist(corner, bc)
+            if d < best_d:
+                best_d, best_c = d, bc
+        return best_d, best_c
+
+    # For each floor polygon edge, find the best matching wall
+    edge_walls = [None] * n
+    used = set()
+    for ei in range(n):
+        v0 = fp[ei]
+        v1 = fp[(ei + 1) % n]
+        best_score = float("inf")
+        best_wi = None
+        for wi, wi_info in enumerate(wall_info):
+            if wi in used:
+                continue
+            d0, _ = find_nearest_bot(v0, wi_info["bot"])
+            d1, _ = find_nearest_bot(v1, wi_info["bot"])
+            score = d0 + d1
+            if score < best_score:
+                best_score = score
+                best_wi = wi
+        if best_wi is not None and best_score < xz_tol * 2:
+            edge_walls[ei] = best_wi
+            used.add(best_wi)
+
+    # Chain top corners in floor polygon order
+    ceiling_pts = []
+    for ei in range(n):
+        wi = edge_walls[ei]
+        if wi is None:
+            continue
+
+        v0 = fp[ei]
+        v1 = fp[(ei + 1) % n]
+        top_corners = wall_info[wi]["top"]
+        bot_corners = wall_info[wi]["bot"]
+
+        # Determine which bot corner is closer to v0 vs v1
+        d0_list = [(xz_dist(v0, bc), bc) for bc in bot_corners]
+        d0_list.sort()
+        start_bot = d0_list[0][1]
+
+        d1_list = [(xz_dist(v1, bc), bc) for bc in bot_corners]
+        d1_list.sort()
+        end_bot = d1_list[0][1]
+
+        # For each bot corner, find the matching top corner (same XZ, higher Y)
+        def find_top_at_xz(bot_c, top_list):
+            best_d, best_t = float("inf"), None
+            for tc in top_list:
+                d = xz_dist(bot_c, tc)
+                if d < best_d:
+                    best_d, best_t = d, tc
+            return best_t
+
+        start_top = find_top_at_xz(start_bot, top_corners)
+        end_top = find_top_at_xz(end_bot, top_corners)
+
+        if start_top is None or end_top is None:
+            continue
+
+        # Collect top corners for this wall in order from start to end.
+        if len(top_corners) <= 2:
+            ordered_top = [start_top, end_top]
+        else:
+            # Find interior top corners (not at start/end bot positions)
+            interior = []
+            for tc in top_corners:
+                d_start = xz_dist(tc, start_bot)
+                d_end = xz_dist(tc, end_bot)
+                if d_start > xz_tol and d_end > xz_tol:
+                    interior.append(tc)
+
+            # Order interior points by projection along edge direction
+            edge_dir = np.array([v1[0] - v0[0], v1[2] - v0[2]])
+            edge_len = np.linalg.norm(edge_dir)
+            if edge_len > 1e-6:
+                edge_unit = edge_dir / edge_len
+                interior.sort(key=lambda c: np.dot(
+                    np.array([c[0] - v0[0], c[2] - v0[2]]), edge_unit))
+
+            ordered_top = [start_top] + interior + [end_top]
+
+        # Emit ceiling points, deduplicating consecutive identical XZ
+        for tc in ordered_top:
+            pt = [round(tc[0], 4), round(tc[1], 4), round(tc[2], 4)]
+            if ceiling_pts:
+                last = ceiling_pts[-1]
+                if (abs(pt[0] - last[0]) < 0.01 and
+                        abs(pt[2] - last[2]) < 0.01):
+                    # Same XZ — keep the higher Y
+                    if pt[1] > last[1]:
+                        ceiling_pts[-1] = pt
+                    continue
+            ceiling_pts.append(pt)
+
+    # Deduplicate first/last if they match in XZ
+    if len(ceiling_pts) >= 2:
+        first, last = ceiling_pts[0], ceiling_pts[-1]
+        if (abs(first[0] - last[0]) < 0.01 and
+                abs(first[2] - last[2]) < 0.01):
+            if last[1] > first[1]:
+                ceiling_pts[0] = last
+            ceiling_pts.pop()
+
+    return ceiling_pts if len(ceiling_pts) >= 3 else None
+
+
+def _flat_ceiling_fallback(rooms, slab_y):
+    """Emit flat ceiling at the median wall-top height."""
+    wall_tops = []
+    for r in rooms:
+        for w in (r.get("walls_computed") or r.get("walls_merged", [])):
+            ys = [c[1] for c in w["corners"]]
+            if ys:
+                wall_tops.append(max(ys))
+    if not wall_tops:
+        return
+    ceil_y = round(float(np.median(wall_tops)), 4)
+    for room in rooms:
+        fp = room.get("floor_polygon", [])
+        if len(fp) < 3:
+            continue
+        room["ceiling_polygon"] = [[round(v[0], 4), ceil_y, round(v[2], 4)] for v in fp]
+        room["ceiling_type"] = "flat"
+        room["ceiling_ridge_height"] = ceil_y
+        room["ceiling_eave_height"] = ceil_y
+
+
+def _find_closest_slab_y(wall_corners, slabs_above):
+    """Find the Y of the closest slab (by XZ distance) from the story above.
+
+    slabs_above: list of (centroid_x, centroid_z, slab_y)
+    Returns slab_y or None if no slabs available.
+    """
+    if not slabs_above:
+        return None
+    wx = np.mean([c[0] for c in wall_corners])
+    wz = np.mean([c[2] for c in wall_corners])
+    best_dist = float("inf")
+    best_y = None
+    for sx, sz, sy in slabs_above:
+        d = math.hypot(wx - sx, wz - sz)
+        if d < best_dist:
+            best_dist = d
+            best_y = sy
+    return best_y
+
+
+def _wall_xz_length(corners):
+    """Compute the XZ-plane length of a wall/element from its corners."""
+    if len(corners) < 2:
+        return 0.0
+    c = np.array(corners)
+    # Use first two corners (bottom edge)
+    dx = c[1][0] - c[0][0]
+    dz = c[1][2] - c[0][2]
+    return math.hypot(dx, dz)
+
+
+def _detect_exterior_gap_indicators(rooms_out):
+    """Detect gaps in front of doors/openings/storages with a parallel wall on the other side.
+
+    For each door/opening/storage wider than MIN_WIDTH:
+    - Compute XZ normal from corner cross product
+    - Search both directions for a parallel wall (angle < MAX_ANGLE) within MIN_DIST-MAX_DIST
+    - Wall must be at least as wide as the element (0.9x tolerance)
+    - For storages: only match walls from a *different* room (same-room wall is just the backing wall)
+    - Keep the closest matching wall, assign confidence
+    """
+    MIN_WIDTH = 1.0
+    MIN_DIST = 0.20
+    MAX_DIST = 1.0
+    MAX_ANGLE = 15.0
+    WIDTH_TOLERANCE = 0.9  # wall must be >= 90% of element width
+
+    # Collect all walls per story, tagged with room index
+    story_walls = defaultdict(list)  # story -> [(wall, room_idx)]
+    for ri, room in enumerate(rooms_out):
+        for w in room["walls_computed"]:
+            story_walls[room["story"]].append((w, ri))
+
+    indicators = []
+
+    def _find_parallel_wall(corners, elem_width, story, room_idx, require_other_room):
+        """Search for a parallel wall across a gap from an element."""
+        c = np.array(corners)
+        e1 = c[1] - c[0]
+        e2 = c[2] - c[1]
+        normal = np.cross(e1, e2)
+        normal_xz = np.array([normal[0], normal[2]])
+        nlen = np.linalg.norm(normal_xz)
+        if nlen < 1e-6:
+            return None
+        normal_xz = normal_xz / nlen
+
+        elem_cx = float(np.mean([co[0] for co in corners]))
+        elem_cz = float(np.mean([co[2] for co in corners]))
+
+        best_match = None
+        best_dist = float("inf")
+
+        for sign in [1.0, -1.0]:
+            direction = normal_xz * sign
+
+            for w, w_room_idx in story_walls.get(story, []):
+                if require_other_room and w_room_idx == room_idx:
+                    continue
+
+                wc = w["corners"]
+                if len(wc) < 3:
+                    continue
+
+                wall_width = _wall_xz_length(wc)
+                if wall_width < elem_width * WIDTH_TOLERANCE:
+                    continue
+
+                wcx = float(np.mean([co[0] for co in wc]))
+                wcz = float(np.mean([co[2] for co in wc]))
+
+                to_wall = np.array([wcx - elem_cx, wcz - elem_cz])
+                dist_along = float(np.dot(to_wall, direction))
+
+                if dist_along < MIN_DIST or dist_along > MAX_DIST:
+                    continue
+
+                perp = float(np.abs(np.dot(to_wall, np.array([-direction[1], direction[0]]))))
+                if perp > max(elem_width, wall_width) * 0.5:
+                    continue
+
+                wc_arr = np.array(wc)
+                we1 = wc_arr[1] - wc_arr[0]
+                we2 = wc_arr[2] - wc_arr[1]
+                wnormal = np.cross(we1, we2)
+                wnormal_xz = np.array([wnormal[0], wnormal[2]])
+                wnlen = np.linalg.norm(wnormal_xz)
+                if wnlen < 1e-6:
+                    continue
+                wnormal_xz = wnormal_xz / wnlen
+
+                cos_angle = abs(float(np.dot(normal_xz, wnormal_xz)))
+                cos_angle = min(cos_angle, 1.0)
+                angle_deg = math.degrees(math.acos(cos_angle))
+
+                if angle_deg > MAX_ANGLE:
+                    continue
+
+                if dist_along < best_dist:
+                    best_dist = dist_along
+                    best_match = (w, wc, dist_along, angle_deg)
+
+        return best_match
+
+    for ri, room in enumerate(rooms_out):
+        story = room["story"]
+
+        # Doors and openings: match any wall on the same story
+        for elem_type, elems in [("door", room.get("doors", [])), ("opening", room.get("openings", []))]:
+            for elem in elems:
+                corners = elem.get("corners", [])
+                if len(corners) < 3:
+                    continue
+                elem_width = _wall_xz_length(corners)
+                if elem_width < MIN_WIDTH:
+                    continue
+                match = _find_parallel_wall(corners, elem_width, story, ri, require_other_room=False)
+                if match:
+                    w, wc, dist_along, angle_deg = match
+                    indicators.append({
+                        "story": story,
+                        "element_type": elem_type,
+                        "element_id": elem["id"],
+                        "element_corners": corners,
+                        "element_width_m": round(elem_width, 2),
+                        "wall_id": w["id"],
+                        "wall_corners": wc,
+                        "wall_distance_m": round(dist_along, 2),
+                        "angle_deg": round(angle_deg, 1),
+                        "confidence": (
+                            "high" if angle_deg < 5 and dist_along < 0.3
+                            else "medium" if angle_deg < 10 and dist_along < 0.6
+                            else "low"
+                        ),
+                    })
+
+        # Storages: only if flush against a same-room wall (<5cm), and matched wall is from another room
+        STORAGE_WALL_PROXIMITY = 0.05
+        room_wall_ids = {w["id"] for w in room["walls_computed"]}
+        for s in room.get("storages", []):
+            corners = s.get("corners", [])
+            if len(corners) < 3:
+                continue
+            elem_width = _wall_xz_length(corners)
+            if elem_width < MIN_WIDTH:
+                continue
+            # Check if storage is flush against any same-room wall
+            sc = np.array(corners)
+            s_cx = float(sc[:, 0].mean())
+            s_cz = float(sc[:, 2].mean())
+            flush = False
+            for w, w_ri in story_walls.get(story, []):
+                if w["id"] not in room_wall_ids:
+                    continue
+                wc = w["corners"]
+                if len(wc) < 2:
+                    continue
+                # Distance from storage center to wall line (XZ plane)
+                w0 = np.array([wc[0][0], wc[0][2]])
+                w1 = np.array([wc[1][0], wc[1][2]])
+                sp = np.array([s_cx, s_cz])
+                edge = w1 - w0
+                elen = np.linalg.norm(edge)
+                if elen < 1e-6:
+                    continue
+                t = float(np.dot(sp - w0, edge)) / (elen * elen)
+                t = max(0.0, min(1.0, t))
+                closest = w0 + t * edge
+                dist = float(np.linalg.norm(sp - closest))
+                if dist < STORAGE_WALL_PROXIMITY + elem_width * 0.5 + _wall_xz_length(wc) * 0.0:
+                    # More precise: perpendicular distance from storage center to wall line
+                    perp_dist = float(np.abs(np.cross(edge, sp - w0))) / elen
+                    if perp_dist < STORAGE_WALL_PROXIMITY:
+                        flush = True
+                        break
+            if not flush:
+                continue
+            match = _find_parallel_wall(corners, elem_width, story, ri, require_other_room=True)
+            if match:
+                w, wc, dist_along, angle_deg = match
+                indicators.append({
+                    "story": story,
+                    "element_type": "storage",
+                    "element_id": s["id"],
+                    "element_corners": corners,
+                    "element_width_m": round(elem_width, 2),
+                    "wall_id": w["id"],
+                    "wall_corners": wc,
+                    "wall_distance_m": round(dist_along, 2),
+                    "angle_deg": round(angle_deg, 1),
+                    "confidence": (
+                        "high" if angle_deg < 5 and dist_along < 0.3
+                        else "medium" if angle_deg < 10 and dist_along < 0.6
+                        else "low"
+                    ),
+                })
+
+    return indicators
+
+
+def _compute_gap_closures(indicators, rooms_out):
+    """Create wall/floor/ceiling quads that close the gaps between parallel walls.
+
+    For each indicator, finds the parent wall of the element, computes the
+    overlap region between the parent wall and the parallel wall in XZ,
+    then creates side-wall, floor, and ceiling quads closing the gap.
+    """
+    closures = []
+
+    # Build wall lookup: wall_id -> corners (for finding parent walls)
+    # Also build element->parent mapping from all rooms
+    all_walls_by_id = {}
+    element_parent_wall = {}  # element_id -> wall_id
+    for room in rooms_out:
+        for w in room["walls_computed"]:
+            all_walls_by_id[w["id"]] = w["corners"]
+        parent_lookup = room.get("_parent_lookup", {})
+        for elem_list in [room.get("doors", []), room.get("openings", []), room.get("storages", [])]:
+            for elem in elem_list:
+                pid = parent_lookup.get(elem["id"])
+                if pid:
+                    element_parent_wall[elem["id"]] = pid
+
+    for ind in indicators:
+        wc = np.array(ind["wall_corners"])
+        if len(wc) < 4:
+            continue
+
+        # Find the parent wall of the element; fall back to element corners
+        parent_id = element_parent_wall.get(ind["element_id"])
+        if parent_id and parent_id in all_walls_by_id:
+            pc = np.array(all_walls_by_id[parent_id])
+        else:
+            pc = np.array(ind["element_corners"])
+        if len(pc) < 4:
+            continue
+
+        # Wall direction: along the bottom edge of the parallel wall (XZ plane)
+        wall_dir = wc[1] - wc[0]
+        wall_dir_xz = np.array([wall_dir[0], 0.0, wall_dir[2]])
+        wall_len = np.linalg.norm(wall_dir_xz)
+        if wall_len < 1e-6:
+            continue
+        axis = wall_dir_xz / wall_len
+
+        # Project all corners onto the shared axis (XZ)
+        origin = np.array([wc[0][0], 0.0, wc[0][2]])
+        axis2d = np.array([axis[0], axis[2]])
+
+        def proj_xz(pts):
+            return [float(np.dot(np.array([p[0], p[2]]) - np.array([origin[0], origin[2]]), axis2d)) for p in pts]
+
+        p_proj = proj_xz(pc)  # parent wall projection
+        w_proj = proj_xz(wc)  # parallel wall projection
+
+        p_min, p_max = min(p_proj), max(p_proj)
+        w_min, w_max = min(w_proj), max(w_proj)
+
+        # Overlap extent along the axis (full parallel region)
+        ov_min = max(p_min, w_min)
+        ov_max = min(p_max, w_max)
+        if ov_max - ov_min < 0.05:
+            continue
+
+        # Wall edges for XZ projection and Y interpolation
+        # Corners assumed [BL, BR, TR, TL]: bottom=0→1, top=3→2
+        p0_xz = np.array([pc[0][0], pc[0][2]])
+        p1_xz = np.array([pc[1][0], pc[1][2]])
+        p_edge = p1_xz - p0_xz
+        p_elen = np.linalg.norm(p_edge)
+
+        w0_xz = np.array([wc[0][0], wc[0][2]])
+        w1_xz = np.array([wc[1][0], wc[1][2]])
+        w_edge = w1_xz - w0_xz
+        w_elen = np.linalg.norm(w_edge)
+
+        def _edge_t(xz_pt, p0, edge, elen):
+            """Compute clamped parameter t along an edge for a given XZ point."""
+            if elen > 1e-6:
+                return float(np.clip(np.dot(xz_pt - p0, edge) / (elen ** 2), 0, 1))
+            return 0.0
+
+        def _interp_wall_y(corners, t, bottom=True):
+            """Interpolate Y along a wall edge.
+
+            bottom: linear interp along corners[0]→corners[1].
+            top: builds a contour from all corners above the Y-midpoint
+                 and interpolates along it, so pentagonal/slanted walls
+                 contribute their ridge height.
+            """
+            if bottom:
+                return float(corners[0][1] + t * (corners[1][1] - corners[0][1]))
+            # Top contour: identify top corners by Y-midpoint
+            c_ys = [c[1] for c in corners]
+            mid_y = (max(c_ys) + min(c_ys)) / 2.0
+            top_cs = [c for c in corners if c[1] > mid_y - 0.01]
+            if len(top_cs) < 2:
+                top_cs = [corners[3], corners[2]]
+            # Parameterise top corners along the bottom edge
+            bot_p0 = np.array([corners[0][0], corners[0][2]])
+            bot_edge = np.array([corners[1][0] - corners[0][0],
+                                 corners[1][2] - corners[0][2]])
+            bot_len2 = float(np.dot(bot_edge, bot_edge))
+            profile = []
+            for c in top_cs:
+                cxz = np.array([c[0], c[2]])
+                ct = float(np.clip(np.dot(cxz - bot_p0, bot_edge) / bot_len2, 0, 1)) if bot_len2 > 1e-12 else 0.0
+                profile.append((ct, c[1]))
+            profile.sort(key=lambda p: p[0])
+            # Interpolate
+            if t <= profile[0][0]:
+                return float(profile[0][1])
+            if t >= profile[-1][0]:
+                return float(profile[-1][1])
+            for k in range(len(profile) - 1):
+                t0, y0 = profile[k]
+                t1, y1 = profile[k + 1]
+                if t0 <= t <= t1:
+                    frac = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
+                    return float(y0 + frac * (y1 - y0))
+            return float(profile[-1][1])
+
+        # Compute XZ positions and interpolated Y at left and right overlap edges
+        side_pts = []  # [(p_xz, p_ybot, p_ytop, w_xz, w_ybot, w_ytop)]
+        for t_val in [ov_min, ov_max]:
+            xz_pt = np.array([origin[0], origin[2]]) + axis2d * t_val
+
+            p_t = _edge_t(xz_pt, p0_xz, p_edge, p_elen)
+            p_xz = p0_xz + p_t * p_edge if p_elen > 1e-6 else p0_xz
+            p_ybot = _interp_wall_y(pc, p_t, bottom=True)
+            p_ytop = _interp_wall_y(pc, p_t, bottom=False)
+
+            w_t = _edge_t(xz_pt, w0_xz, w_edge, w_elen)
+            w_xz = w0_xz + w_t * w_edge if w_elen > 1e-6 else w0_xz
+            w_ybot = _interp_wall_y(wc, w_t, bottom=True)
+            w_ytop = _interp_wall_y(wc, w_t, bottom=False)
+
+            side_pts.append((p_xz, p_ybot, p_ytop, w_xz, w_ybot, w_ytop))
+
+            # Side wall quad: follows the slope of both walls
+            closures.append({
+                "corners": [
+                    [float(p_xz[0]), p_ybot, float(p_xz[1])],
+                    [float(w_xz[0]), w_ybot, float(w_xz[1])],
+                    [float(w_xz[0]), w_ytop, float(w_xz[1])],
+                    [float(p_xz[0]), p_ytop, float(p_xz[1])],
+                ],
+                "type": "side",
+                "indicator_element_id": ind["element_id"],
+                "indicator_wall_id": ind["wall_id"],
+                "story": ind["story"],
+            })
+
+        # Floor quad: follows the bottom edge slope of both walls
+        L, R = side_pts
+        p_xz_l, p_ybot_l, p_ytop_l, w_xz_l, w_ybot_l, w_ytop_l = L
+        p_xz_r, p_ybot_r, p_ytop_r, w_xz_r, w_ybot_r, w_ytop_r = R
+        closures.append({
+            "corners": [
+                [float(p_xz_l[0]), p_ybot_l, float(p_xz_l[1])],
+                [float(p_xz_r[0]), p_ybot_r, float(p_xz_r[1])],
+                [float(w_xz_r[0]), w_ybot_r, float(w_xz_r[1])],
+                [float(w_xz_l[0]), w_ybot_l, float(w_xz_l[1])],
+            ],
+            "type": "floor",
+            "indicator_element_id": ind["element_id"],
+            "indicator_wall_id": ind["wall_id"],
+            "story": ind["story"],
+        })
+
+        # Ceiling quad: follows the top edge slope of both walls
+        closures.append({
+            "corners": [
+                [float(p_xz_l[0]), p_ytop_l, float(p_xz_l[1])],
+                [float(p_xz_r[0]), p_ytop_r, float(p_xz_r[1])],
+                [float(w_xz_r[0]), w_ytop_r, float(w_xz_r[1])],
+                [float(w_xz_l[0]), w_ytop_l, float(w_xz_l[1])],
+            ],
+            "type": "ceiling",
+            "indicator_element_id": ind["element_id"],
+            "indicator_wall_id": ind["wall_id"],
+            "story": ind["story"],
+        })
+
+    return closures
+
+
+def _stitch_wall_gaps(rooms_out):
+    """Create small fill quads between disconnected wall endpoints.
+
+    When RoomPlan scans produce walls whose endpoints don't perfectly chain
+    together, visible gaps appear.  This pass finds pairs of nearby unconnected
+    endpoints and creates a rectangular fill wall between them.
+
+    Works both within and across rooms on the same story.
+
+    Only stitches gaps where both walls are full-height (close to the story's
+    median wall height) to avoid filling intentional openings like half-walls
+    or transoms.
+    """
+    MAX_GAP = 1.50        # max XZ distance between endpoints to stitch
+    MIN_GAP = 0.06        # skip tiny gaps (rounding noise)
+    MIN_WALL_HEIGHT = 0.5 # ignore short walls (slabs, baseboards)
+    HEIGHT_RATIO = 0.65   # both walls must be >= this fraction of story median height
+
+    # Group rooms by story
+    story_rooms = defaultdict(list)
+    for ri, room in enumerate(rooms_out):
+        story_rooms[room["story"]].append((ri, room))
+
+    stitch_walls = []
+
+    for story, rooms in story_rooms.items():
+        # Compute story-wide median wall height
+        wall_heights = []
+        for _, room in rooms:
+            for w in room["walls_computed"]:
+                c = w["corners"]
+                if len(c) >= 4:
+                    h = abs(c[2][1] - c[0][1])
+                    if h >= MIN_WALL_HEIGHT:
+                        wall_heights.append(h)
+        if not wall_heights:
+            continue
+        median_h = float(np.median(wall_heights))
+
+        # Collect endpoints from all walls on this story
+        # Each entry: (x, z, y_bot, y_top, global_wall_key, endpoint_side)
+        # global_wall_key = (room_index, wall_index) to distinguish walls across rooms
+        endpoints = []
+        for ri, room in rooms:
+            for wi, w in enumerate(room["walls_computed"]):
+                c = w["corners"]
+                if len(c) < 4:
+                    continue
+                h = abs(c[2][1] - c[0][1])
+                if h < MIN_WALL_HEIGHT or h < median_h * HEIGHT_RATIO:
+                    continue
+                # Use extension-adjusted top Y when available
+                ext = w.get("extension_strip")
+                if ext:
+                    ext_top = max(max(p[1] for p in strip) for strip in ext)
+                else:
+                    ext_top = None
+                yt0 = ext_top if ext_top is not None else c[3][1]
+                yt1_val = ext_top if ext_top is not None else c[2][1]
+                wk = (ri, wi)
+                endpoints.append((c[0][0], c[0][2], c[0][1], yt0, wk, 0))
+                endpoints.append((c[1][0], c[1][2], c[1][1], yt1_val, wk, 1))
+
+        # Find nearest-neighbor pairs from different walls.
+        # For small gaps (<= MUTUAL_THRESH), require mutual nearest-neighbor
+        # to avoid spurious fills.  For larger gaps, the endpoint is likely
+        # an orphan (its target already connects to something closer), so
+        # just use one-way nearest-neighbor.
+        MUTUAL_THRESH = 0.60
+        used_pairs = set()
+
+        for i in range(len(endpoints)):
+            x1, z1, yb1, yt1, wk1, ei1 = endpoints[i]
+            best_dist = MAX_GAP
+            best_j = -1
+
+            for j in range(len(endpoints)):
+                if i == j:
+                    continue
+                x2, z2, yb2, yt2, wk2, ei2 = endpoints[j]
+                if wk2 == wk1:
+                    continue  # same wall
+
+                dist = math.hypot(x1 - x2, z1 - z2)
+                if dist < MIN_GAP or dist >= best_dist:
+                    continue
+
+                best_dist = dist
+                best_j = j
+
+            if best_j < 0:
+                continue
+
+            x2, z2, yb2, yt2, wk2, ei2 = endpoints[best_j]
+
+            # For small gaps, require mutual nearest-neighbor
+            if best_dist <= MUTUAL_THRESH:
+                reverse_best_dist = MAX_GAP
+                reverse_best = -1
+                for k in range(len(endpoints)):
+                    if k == best_j:
+                        continue
+                    xk, zk, _, _, wkk, _ = endpoints[k]
+                    if wkk == wk2:
+                        continue
+                    dk = math.hypot(x2 - xk, z2 - zk)
+                    if dk < MIN_GAP:
+                        continue
+                    if dk < reverse_best_dist:
+                        reverse_best_dist = dk
+                        reverse_best = k
+                if reverse_best != i:
+                    continue
+
+            pair_key = tuple(sorted([(*wk1, ei1), (*wk2, ei2)]))
+            if pair_key in used_pairs:
+                continue
+            used_pairs.add(pair_key)
+
+            # Create fill quad
+            y_bot = max(yb1, yb2)
+            y_top = min(yt1, yt2)
+            if y_top - y_bot < MIN_WALL_HEIGHT:
+                continue
+
+            stitch_walls.append({
+                "corners": [
+                    [x1, y_bot, z1],
+                    [x2, y_bot, z2],
+                    [x2, y_top, z2],
+                    [x1, y_top, z1],
+                ],
+                "story": story,
+                "type": "stitch",
+            })
+
+    return stitch_walls
 
 
 def extract_building(uuid, pipeline_dir, scan_cache_root):
@@ -392,15 +1870,64 @@ def extract_building(uuid, pipeline_dir, scan_cache_root):
 
     # Build wall UUID -> raw room + transform mapping
     raw_wall_data = {}  # wall_uuid -> (wall_data, R, t, method)
+    raw_door_data = {}  # door_uuid -> (door_data, R, t, method)
+    raw_window_data = {}  # window_uuid -> (window_data, R, t, method)
+    raw_opening_data = {}  # opening_uuid -> (opening_data, R, t, method)
+    raw_storage_data = {}  # storage_uuid -> (object_data, R, t, method)
+    # Prefer floor-svd transforms over wall-center-svd when the same element
+    # appears in multiple raw rooms (floor-svd is higher quality)
+    _METHOD_RANK = {"floor-svd": 2, "hybrid": 1, "wall-center-svd": 0}
     for rname, rdata in raw_rooms:
         if rname not in raw_transforms:
             continue
         R, t, _res, method = raw_transforms[rname]
+        rank = _METHOD_RANK.get(method, 0)
         for w in rdata.get("walls", []):
-            raw_wall_data[w["identifier"]] = (w, R, t, method)
+            wid = w["identifier"]
+            if wid not in raw_wall_data or rank > _METHOD_RANK.get(raw_wall_data[wid][3], 0):
+                raw_wall_data[wid] = (w, R, t, method)
+        for d in rdata.get("doors", []):
+            did = d["identifier"]
+            if did not in raw_door_data or rank > _METHOD_RANK.get(raw_door_data[did][3], 0):
+                raw_door_data[did] = (d, R, t, method)
+        for w in rdata.get("windows", []):
+            wid = w["identifier"]
+            if wid not in raw_window_data or rank > _METHOD_RANK.get(raw_window_data[wid][3], 0):
+                raw_window_data[wid] = (w, R, t, method)
+        for o in rdata.get("openings", []):
+            oid = o["identifier"]
+            if oid not in raw_opening_data or rank > _METHOD_RANK.get(raw_opening_data[oid][3], 0):
+                raw_opening_data[oid] = (o, R, t, method)
+        for obj in rdata.get("objects", []):
+            cat = obj.get("category", {})
+            if isinstance(cat, dict) and "storage" in cat:
+                sid = obj["identifier"]
+                if sid not in raw_storage_data or rank > _METHOD_RANK.get(raw_storage_data[sid][3], 0):
+                    raw_storage_data[sid] = (obj, R, t, method)
 
-    # Track globally which deduped walls have been added (avoid duplicates across rooms)
+    # Track globally which deduped items have been added (avoid duplicates across rooms)
     global_dedup_added = set()
+    global_dedup_doors_added = set()
+    global_dedup_windows_added = set()
+    global_dedup_openings_added = set()
+    global_dedup_storages_added = set()
+
+    # Build merged door/window/opening UUID sets for dedup detection
+    merged_door_ids = set()
+    merged_window_ids = set()
+    merged_opening_ids = set()
+    merged_storage_ids = set()
+    for omr in merged["rooms"]:
+        for d in omr.get("doors", []):
+            merged_door_ids.add(d["identifier"])
+        for w in omr.get("windows", []):
+            merged_window_ids.add(w["identifier"])
+        for o in omr.get("openings", []):
+            merged_opening_ids.add(o["identifier"])
+        for obj in omr.get("objects", []):
+            cat = obj.get("category", {})
+            if isinstance(cat, dict) and "storage" in cat:
+                merged_storage_ids.add(obj["identifier"])
 
     # Extract rooms
     rooms_out = []
@@ -428,8 +1955,8 @@ def extract_building(uuid, pipeline_dir, scan_cache_root):
             for mw in omr.get("walls", []):
                 merged_wall_by_id[mw["identifier"]] = mw
 
-        # Raw walls: use scan-cache geometry where possible
-        walls_raw = []
+        # Computed walls: best-available geometry from scan-cache, hybrid, or merged fallback
+        walls_computed = []
         for w in mr.get("walls", []):
             wid = w["identifier"]
             if wid in raw_wall_data:
@@ -438,20 +1965,20 @@ def extract_building(uuid, pipeline_dir, scan_cache_root):
                     # High-quality transform — use full SVD on raw wall
                     raw_corners = wall_world_corners(raw_w)
                     transformed = [(R @ np.array(c) + t_vec).tolist() for c in raw_corners]
-                    walls_raw.append({"corners": transformed, "id": wid, "source": "scan-cache"})
+                    walls_computed.append({"corners": transformed, "id": wid, "source": "scan-cache"})
                 else:
                     # Wall-center SVD (noisy) — hybrid: merged position + raw dimensions
                     fy = np.mean([c[1] for c in floor_polygon]) if floor_polygon else None
                     corners = hybrid_wall_corners(w, raw_w, floor_y=fy)
-                    walls_raw.append({"corners": corners, "id": wid, "source": "hybrid"})
+                    walls_computed.append({"corners": corners, "id": wid, "source": "hybrid"})
             else:
                 # No raw data — use merged room wall as-is
                 corners = wall_world_corners(w)
-                walls_raw.append({"corners": corners, "id": wid, "source": "merged-room"})
+                walls_computed.append({"corners": corners, "id": wid, "source": "merged-room"})
 
         # Also add walls that are in raw rooms but NOT in any merged room (dropped by dedup)
         # These are the "other side" of shared walls — add each deduped wall only once
-        added_uuids = {w["id"] for w in walls_raw}
+        added_uuids = {w["id"] for w in walls_computed}
         for rname, rdata in raw_rooms:
             if rname not in raw_transforms:
                 continue
@@ -478,24 +2005,323 @@ def extract_building(uuid, pipeline_dir, scan_cache_root):
 
                 raw_corners = wall_world_corners(w)
                 transformed = [(R @ np.array(c) + t_vec).tolist() for c in raw_corners]
-                walls_raw.append({"corners": transformed, "id": wid, "source": "scan-cache-dedup"})
+                walls_computed.append({"corners": transformed, "id": wid, "source": "scan-cache-dedup"})
                 added_uuids.add(wid)
                 global_dedup_added.add(wid)
+
+        # Helper: check if opening corners are near their parent wall
+        # Returns True if opening center is within max_dist of parent wall center
+        def _opening_near_parent(opening_corners, parent_id, max_dist=1.5):
+            parent_wall = next(
+                (w for w in walls_computed if w["id"] == parent_id), None
+            )
+            if parent_wall is None:
+                return True  # Can't check, assume OK
+            oc = np.mean(opening_corners, axis=0)
+            pc = np.mean(parent_wall["corners"], axis=0)
+            return float(np.linalg.norm(oc - pc)) < max_dist
+
+        # Doors: extract from merged room, use raw scan transform if available
+        doors_out = []
+        for d in mr.get("doors", []):
+            did = d["identifier"]
+            parent_id = d.get("parentIdentifier")
+            if did in raw_door_data:
+                raw_d, R, t_vec, method = raw_door_data[did]
+                if method == "floor-svd":
+                    raw_corners = wall_world_corners(raw_d)
+                    transformed = [(R @ np.array(c) + t_vec).tolist() for c in raw_corners]
+                    if _opening_near_parent(transformed, parent_id):
+                        doors_out.append({"corners": transformed, "id": did, "source": "scan-cache"})
+                    else:
+                        corners = wall_world_corners(d)
+                        doors_out.append({"corners": corners, "id": did, "source": "merged-room"})
+                else:
+                    corners = wall_world_corners(d)
+                    doors_out.append({"corners": corners, "id": did, "source": "merged-room"})
+            else:
+                corners = wall_world_corners(d)
+                doors_out.append({"corners": corners, "id": did, "source": "merged-room"})
+
+        # Also add doors from raw rooms that were dropped during merge (dedup)
+        added_door_ids = {d["id"] for d in doors_out}
+        for rname, rdata in raw_rooms:
+            if rname not in raw_transforms:
+                continue
+            R, t_vec, _res, method = raw_transforms[rname]
+            if method != "floor-svd":
+                continue
+            raw_uuids = {w["identifier"] for w in rdata.get("walls", [])}
+            mr_uuids = {w["identifier"] for w in mr.get("walls", [])}
+            if not (raw_uuids & mr_uuids):
+                continue
+            for d in rdata.get("doors", []):
+                did = d["identifier"]
+                if did in added_door_ids or did in global_dedup_doors_added or did in merged_door_ids:
+                    continue
+                raw_corners = wall_world_corners(d)
+                transformed = [(R @ np.array(c) + t_vec).tolist() for c in raw_corners]
+                parent_id = d.get("parentIdentifier")
+                if not _opening_near_parent(transformed, parent_id):
+                    continue  # Skip dedup doors displaced from parent wall
+                doors_out.append({"corners": transformed, "id": did, "source": "scan-cache-dedup"})
+                added_door_ids.add(did)
+                global_dedup_doors_added.add(did)
+
+        # Windows: extract from merged room, use raw scan transform if available
+        windows_out = []
+        for w in mr.get("windows", []):
+            wid = w["identifier"]
+            parent_id = w.get("parentIdentifier")
+            if wid in raw_window_data:
+                raw_w, R, t_vec, method = raw_window_data[wid]
+                if method == "floor-svd":
+                    raw_corners = wall_world_corners(raw_w)
+                    transformed = [(R @ np.array(c) + t_vec).tolist() for c in raw_corners]
+                    if _opening_near_parent(transformed, parent_id):
+                        windows_out.append({"corners": transformed, "id": wid, "source": "scan-cache"})
+                    else:
+                        corners = wall_world_corners(w)
+                        windows_out.append({"corners": corners, "id": wid, "source": "merged-room"})
+                else:
+                    corners = wall_world_corners(w)
+                    windows_out.append({"corners": corners, "id": wid, "source": "merged-room"})
+            else:
+                corners = wall_world_corners(w)
+                windows_out.append({"corners": corners, "id": wid, "source": "merged-room"})
+
+        # Also add windows from raw rooms that were dropped during merge (dedup)
+        added_window_ids = {w["id"] for w in windows_out}
+        for rname, rdata in raw_rooms:
+            if rname not in raw_transforms:
+                continue
+            R, t_vec, _res, method = raw_transforms[rname]
+            if method != "floor-svd":
+                continue
+            raw_uuids = {w["identifier"] for w in rdata.get("walls", [])}
+            mr_uuids = {w["identifier"] for w in mr.get("walls", [])}
+            if not (raw_uuids & mr_uuids):
+                continue
+            for w in rdata.get("windows", []):
+                wid = w["identifier"]
+                if wid in added_window_ids or wid in global_dedup_windows_added or wid in merged_window_ids:
+                    continue
+                raw_corners = wall_world_corners(w)
+                transformed = [(R @ np.array(c) + t_vec).tolist() for c in raw_corners]
+                parent_id = w.get("parentIdentifier")
+                if not _opening_near_parent(transformed, parent_id):
+                    continue  # Skip dedup windows displaced from parent wall
+                windows_out.append({"corners": transformed, "id": wid, "source": "scan-cache-dedup"})
+                added_window_ids.add(wid)
+                global_dedup_windows_added.add(wid)
+
+        # Openings (same extraction pattern as doors)
+        openings_out = []
+        for o in mr.get("openings", []):
+            oid = o["identifier"]
+            parent_id = o.get("parentIdentifier")
+            if oid in raw_opening_data:
+                raw_o, R, t_vec, method = raw_opening_data[oid]
+                if method == "floor-svd":
+                    raw_corners = wall_world_corners(raw_o)
+                    transformed = [(R @ np.array(c) + t_vec).tolist() for c in raw_corners]
+                    if _opening_near_parent(transformed, parent_id):
+                        openings_out.append({"corners": transformed, "id": oid, "source": "scan-cache"})
+                    else:
+                        corners = wall_world_corners(o)
+                        openings_out.append({"corners": corners, "id": oid, "source": "merged-room"})
+                else:
+                    corners = wall_world_corners(o)
+                    openings_out.append({"corners": corners, "id": oid, "source": "merged-room"})
+            else:
+                corners = wall_world_corners(o)
+                openings_out.append({"corners": corners, "id": oid, "source": "merged-room"})
+
+        # Also add openings from raw rooms dropped during merge (dedup)
+        added_opening_ids = {o["id"] for o in openings_out}
+        for rname, rdata in raw_rooms:
+            if rname not in raw_transforms:
+                continue
+            R, t_vec, _res, method = raw_transforms[rname]
+            if method != "floor-svd":
+                continue
+            raw_uuids = {w["identifier"] for w in rdata.get("walls", [])}
+            mr_uuids = {w["identifier"] for w in mr.get("walls", [])}
+            if not (raw_uuids & mr_uuids):
+                continue
+            for o in rdata.get("openings", []):
+                oid = o["identifier"]
+                if oid in added_opening_ids or oid in global_dedup_openings_added or oid in merged_opening_ids:
+                    continue
+                raw_corners = wall_world_corners(o)
+                transformed = [(R @ np.array(c) + t_vec).tolist() for c in raw_corners]
+                parent_id = o.get("parentIdentifier")
+                if not _opening_near_parent(transformed, parent_id):
+                    continue
+                openings_out.append({"corners": transformed, "id": oid, "source": "scan-cache-dedup"})
+                added_opening_ids.add(oid)
+                global_dedup_openings_added.add(oid)
+
+        # Storage objects: synthesize corners from dimensions + transform (no polygonCorners)
+        storages_out = []
+        added_storage_ids = set()
+        for rname, rdata in raw_rooms:
+            if rname not in raw_transforms:
+                continue
+            R, t_vec, _res, method = raw_transforms[rname]
+            if method != "floor-svd":
+                continue
+            raw_uuids = {w["identifier"] for w in rdata.get("walls", [])}
+            mr_uuids = {w["identifier"] for w in mr.get("walls", [])}
+            if not (raw_uuids & mr_uuids):
+                continue
+            for obj in rdata.get("objects", []):
+                cat = obj.get("category", {})
+                if not (isinstance(cat, dict) and "storage" in cat):
+                    continue
+                sid = obj["identifier"]
+                if sid in added_storage_ids or sid in global_dedup_storages_added:
+                    continue
+                # Synthesize rectangle corners from dimensions + transform
+                corners = wall_world_corners(obj)  # uses dimensions fallback since no polygonCorners
+                transformed = [(R @ np.array(c) + t_vec).tolist() for c in corners]
+                storages_out.append({"corners": transformed, "id": sid, "source": "scan-cache"})
+                added_storage_ids.add(sid)
+                global_dedup_storages_added.add(sid)
+
+        # Build parent lookup for door/window/opening clamping (applied after wall post-processing)
+        parent_lookup = {}
+        for d in mr.get("doors", []):
+            pid = d.get("parentIdentifier")
+            if pid:
+                parent_lookup[d["identifier"]] = pid
+        for w in mr.get("windows", []):
+            pid = w.get("parentIdentifier")
+            if pid:
+                parent_lookup[w["identifier"]] = pid
+        for o in mr.get("openings", []):
+            pid = o.get("parentIdentifier")
+            if pid:
+                parent_lookup[o["identifier"]] = pid
+        for rname, rdata in raw_rooms:
+            for d in rdata.get("doors", []):
+                pid = d.get("parentIdentifier")
+                if pid and d["identifier"] not in parent_lookup:
+                    parent_lookup[d["identifier"]] = pid
+            for w in rdata.get("windows", []):
+                pid = w.get("parentIdentifier")
+                if pid and w["identifier"] not in parent_lookup:
+                    parent_lookup[w["identifier"]] = pid
+            for o in rdata.get("openings", []):
+                pid = o.get("parentIdentifier")
+                if pid and o["identifier"] not in parent_lookup:
+                    parent_lookup[o["identifier"]] = pid
 
         rooms_out.append({
             "story": story,
             "floor_polygon": floor_polygon,
             "walls_merged": walls_merged,
-            "walls_raw": walls_raw,
+            "walls_computed": walls_computed,
+            "doors": doors_out,
+            "windows": windows_out,
+            "openings": openings_out,
+            "storages": storages_out,
+            "_parent_lookup": parent_lookup,
         })
+
+    # Clip overlapping floor polygons within each story
+    floor_overlap_metrics = _clip_floor_overlaps(rooms_out)
+
+    # Extend raw walls upward to close vertical gaps between floors
+    # Build per-story floor slab index: story -> list of (cx, cz, slab_y)
+    # Filter out half-floor rooms (floor Y far from story median)
+    MAX_HALF_FLOOR = 0.50
+    story_slab_raw = defaultdict(list)  # story -> [(cx, cz, floor_y)]
+    for room in rooms_out:
+        fp = room["floor_polygon"]
+        if fp and len(fp) >= 3:
+            cx = float(np.mean([c[0] for c in fp]))
+            cz = float(np.mean([c[2] for c in fp]))
+            cy = float(np.mean([c[1] for c in fp]))
+            story_slab_raw[room["story"]].append((cx, cz, cy))
+
+    story_slabs = defaultdict(list)
+    for story, entries in story_slab_raw.items():
+        median_y = float(np.median([fy for _, _, fy in entries]))
+        for cx, cz, fy in entries:
+            if abs(fy - median_y) <= MAX_HALF_FLOOR:
+                story_slabs[story].append((cx, cz, fy))
+
+    # Clip walls to story Y boundaries (staircase wall overlap removal)
+    story_y_map = {}
+    for story, entries in story_slabs.items():
+        story_y_map[story] = float(np.median([fy for _, _, fy in entries]))
+    wall_clip_metrics = _clip_walls_to_story_bounds(rooms_out, story_y_map)
+
+    for room in rooms_out:
+        slabs_above = story_slabs.get(room["story"] + 1, [])
+        for w in room["walls_computed"]:
+            slab_y = _find_closest_slab_y(w["corners"], slabs_above)
+            if slab_y is None:
+                w["extension_strip"] = None
+                continue
+            result = _extend_wall_to_slab(w["corners"], slab_y)
+            if result is None:
+                w["extension_strip"] = None
+            else:
+                w["extension_strip"] = result["extension_strip"]
+
+    # Infer ceiling polygons from roof plane fitting
+    _infer_ceilings(rooms_out)
 
     # Cross-floor gap detection from floor polygons
     cross_floor_gaps_out = _compute_cross_floor_gaps(rooms_out)
 
-    raw_total = sum(len(r["walls_raw"]) for r in rooms_out)
+    # Detect exterior gap indicators from doors/openings
+    exterior_gap_indicators = _detect_exterior_gap_indicators(rooms_out)
+
+    # Compute gap closure geometry (side walls that close detected gaps)
+    gap_closures = _compute_gap_closures(exterior_gap_indicators, rooms_out)
+
+    # Create wall quads along gap edges (uses room walls + gap closures for Y snap)
+    gap_walls = _compute_gap_walls(cross_floor_gaps_out, rooms_out, story_y_map, gap_closures)
+
+    # Stitch disconnected wall endpoints within each room
+    stitch_walls = _stitch_wall_gaps(rooms_out)
+
+    # Clamp doors/windows to their parent wall bounds (after all wall post-processing)
+    for room in rooms_out:
+        parent_lookup = room.pop("_parent_lookup", {})
+        wall_corners_by_id = {w["id"]: w["corners"] for w in room["walls_computed"]}
+        for w in room["walls_merged"]:
+            if w["id"] not in wall_corners_by_id:
+                wall_corners_by_id[w["id"]] = w["corners"]
+
+        # Room-level bounding box as fallback for openings without parent match
+        all_wc = [c for w in room["walls_computed"] for c in w["corners"]]
+        room_bbox = None
+        if all_wc:
+            arr = np.array(all_wc)
+            room_bbox = (arr.min(axis=0), arr.max(axis=0))
+
+        for opening_list in (room["doors"], room["windows"]):
+            for opening in opening_list:
+                pid = parent_lookup.get(opening["id"])
+                if pid and pid in wall_corners_by_id:
+                    opening["corners"] = clamp_opening_to_parent(
+                        opening["corners"], wall_corners_by_id[pid]
+                    )
+                elif room_bbox is not None:
+                    bbox_min, bbox_max = room_bbox
+                    opening["corners"] = [
+                        np.clip(c, bbox_min, bbox_max).tolist()
+                        for c in opening["corners"]
+                    ]
+
+    computed_total = sum(len(r["walls_computed"]) for r in rooms_out)
     merged_total = sum(len(r["walls_merged"]) for r in rooms_out)
     scan_cache_count = sum(
-        1 for r in rooms_out for w in r["walls_raw"] if w.get("source") == "scan-cache"
+        1 for r in rooms_out for w in r["walls_computed"] if w.get("source") == "scan-cache"
     )
 
     address = parse_address_from_scan_dir(scan_dir) if scan_dir else None
@@ -507,12 +2333,34 @@ def extract_building(uuid, pipeline_dir, scan_cache_root):
         "rooms": rooms_out,
         "stories_found": stories_found,
         "stories_changed": stories_changed,
-        "raw_walls_total": raw_total,
+        "computed_walls_total": computed_total,
         "merged_walls_total": merged_total,
         "scan_cache_walls": scan_cache_count,
-        "raw_rooms_found": len(raw_rooms),
-        "raw_rooms_transformed": len(raw_transforms),
+        "scan_rooms_found": len(raw_rooms),
+        "scan_rooms_transformed": len(raw_transforms),
         "cross_floor_gaps": cross_floor_gaps_out,
+        "gap_walls": gap_walls,
+        "stitch_walls": stitch_walls,
+        "exterior_gap_indicators": exterior_gap_indicators,
+        "gap_closures": gap_closures,
+        "overlap_metrics": {
+            "floor_overlaps": floor_overlap_metrics,
+            "floor_overlap_count": len(floor_overlap_metrics),
+            "total_floor_overlap_area_m2": round(
+                sum(m["overlap_area_m2"] for m in floor_overlap_metrics), 2
+            ),
+            "walls_removed_in_overlap": sum(
+                m.get("walls_removed", 0) for m in floor_overlap_metrics
+            ),
+            "doors_transferred": sum(
+                m.get("doors_transferred", 0) for m in floor_overlap_metrics
+            ),
+            "windows_transferred": sum(
+                m.get("windows_transferred", 0) for m in floor_overlap_metrics
+            ),
+            "walls_clipped": wall_clip_metrics["walls_clipped"],
+            "walls_checked": wall_clip_metrics["walls_checked"],
+        },
     }
 
 
@@ -520,15 +2368,15 @@ def main():
     pipeline_dir = Path("pipeline-outputs")
     scan_cache_root = Path(".scan-cache")
 
-    # Select buildings to extract
-    uuids = sys.argv[1:] if len(sys.argv) > 1 else [
-        "938d6ed6",  # 3-story, 22 rooms
-        "3c74f488",  # 3-story
-        "612d1bc8",
-        "73c1d779",
-        "b8782b87",
-        "9bb4ada4",
-    ]
+    # Select buildings to extract: CLI args or all from pipeline-outputs
+    if len(sys.argv) > 1:
+        uuids = sys.argv[1:]
+    else:
+        uuids = sorted(
+            entry.name
+            for entry in pipeline_dir.iterdir()
+            if entry.is_dir() and (entry / "merged.json").exists()
+        )
 
     results = []
     for uuid in uuids:
@@ -536,13 +2384,13 @@ def main():
         result = extract_building(uuid, pipeline_dir, scan_cache_root)
         if result:
             results.append(result)
-            raw_total = result["raw_walls_total"]
+            computed_total = result["computed_walls_total"]
             merged_total = result["merged_walls_total"]
             scan_cache = result["scan_cache_walls"]
             print(f"  {len(result['rooms'])} rooms, {result['stories_found']} stories, "
-                  f"{raw_total} raw walls ({scan_cache} from scan-cache), "
+                  f"{computed_total} computed walls ({scan_cache} from scan-cache), "
                   f"{merged_total} merged walls, "
-                  f"{result['raw_rooms_found']} raw rooms ({result['raw_rooms_transformed']} transformed)")
+                  f"{result['scan_rooms_found']} scan rooms ({result['scan_rooms_transformed']} transformed)")
         else:
             print(f"  SKIPPED (no merged.json)")
 
