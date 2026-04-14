@@ -7,8 +7,6 @@ import math
 import os
 from pathlib import Path
 
-import numpy as np
-
 from .models import Building, Floor, Room, Surface, Transform, Vec3
 
 # Files in scan-cache that are NOT individual room scans

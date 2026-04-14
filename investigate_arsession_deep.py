@@ -6,11 +6,12 @@ If yes, it means the ARSession/worldMap was reset mid-scan.
 """
 
 import json
-import os
 import math
-import numpy as np
-from pathlib import Path
+import os
 from collections import defaultdict
+from pathlib import Path
+
+import numpy as np
 
 CACHE = Path(".scan-cache")
 PIPELINE = Path("pipeline-outputs")
@@ -267,7 +268,7 @@ def main():
         # Show merged.json comparison
         merged = analyze_merged_per_story(r["uuid"])
         if merged:
-            print(f"\n  MERGED.JSON (per story):")
+            print("\n  MERGED.JSON (per story):")
             for story, v in sorted(merged.items()):
                 ident = "identical" if v["all_identical_trans"] else f"VARIES by {v['max_trans_diff_m']:.3f}m"
                 print(f"    Story {story}: {v['num_rooms']} rooms, translations {ident}")
@@ -331,7 +332,7 @@ def main():
                 control_intra_floor_vars.append(fl["max_trans_diff_m"])
                 control_intra_floor_rots.append(fl["max_rot_diff_deg"])
 
-    print(f"\n  INTRA-FLOOR referenceOriginTransform variation (rooms on SAME floor have different origins):")
+    print("\n  INTRA-FLOOR referenceOriginTransform variation (rooms on SAME floor have different origins):")
     print(f"    TARGETS: {target_multi_group_floors}/{target_total_floors} floors have multiple ref-origin groups")
     print(f"    CONTROLS: {control_multi_group_floors}/{control_total_floors} floors have multiple ref-origin groups")
 
@@ -349,7 +350,7 @@ def main():
               f"max={np.max(control_intra_floor_rots):.2f}deg")
 
     # Cross-floor analysis: do different floors always have different ref origins?
-    print(f"\n  CROSS-FLOOR referenceOriginTransform (expected to differ between floors):")
+    print("\n  CROSS-FLOOR referenceOriginTransform (expected to differ between floors):")
     for r in target_results + control_results:
         if len(r["floors"]) > 1:
             floor_translations = []
@@ -362,19 +363,19 @@ def main():
                     print(f"      {ft:>10}: [{t[0]:.3f}, {t[1]:.3f}, {t[2]:.3f}]")
 
     # Key finding: Are the ref-origin groups correlated with the floor boundaries?
-    print(f"\n\n  KEY QUESTION: Within a single floor scan, do rooms share the same ARSession?")
-    print(f"  ============")
-    print(f"\n  Observation: ALL buildings (both target and control) show different referenceOriginTransforms")
-    print(f"  between rooms, even on the same floor. This is because Apple RoomPlan creates a new")
-    print(f"  coordinate system for each room scan. The referenceOriginTransform maps from the room's")
-    print(f"  local coordinate system to the shared ARSession world coordinate system.")
-    print(f"\n  The fact that referenceOriginTransform DIFFERS between rooms is EXPECTED and NORMAL.")
-    print(f"  What matters is whether the overall ARSession coordinate frame (the 'world' origin)")
-    print(f"  remains consistent. If a new ARSession was started mid-scan, room transforms would")
-    print(f"  be relative to a DIFFERENT world origin, making them incompatible.")
-    print(f"\n  To detect this, we need to check if rooms from the same floor, when transformed by")
-    print(f"  their referenceOriginTransform, produce consistent spatial positions. That analysis")
-    print(f"  follows in the merged.json check (where all rooms are already in a shared frame).")
+    print("\n\n  KEY QUESTION: Within a single floor scan, do rooms share the same ARSession?")
+    print("  ============")
+    print("\n  Observation: ALL buildings (both target and control) show different referenceOriginTransforms")
+    print("  between rooms, even on the same floor. This is because Apple RoomPlan creates a new")
+    print("  coordinate system for each room scan. The referenceOriginTransform maps from the room's")
+    print("  local coordinate system to the shared ARSession world coordinate system.")
+    print("\n  The fact that referenceOriginTransform DIFFERS between rooms is EXPECTED and NORMAL.")
+    print("  What matters is whether the overall ARSession coordinate frame (the 'world' origin)")
+    print("  remains consistent. If a new ARSession was started mid-scan, room transforms would")
+    print("  be relative to a DIFFERENT world origin, making them incompatible.")
+    print("\n  To detect this, we need to check if rooms from the same floor, when transformed by")
+    print("  their referenceOriginTransform, produce consistent spatial positions. That analysis")
+    print("  follows in the merged.json check (where all rooms are already in a shared frame).")
 
 
 if __name__ == "__main__":

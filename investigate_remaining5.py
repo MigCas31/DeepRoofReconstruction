@@ -11,11 +11,12 @@ Look for other anomalies:
 """
 
 import json
-import os
 import math
-import numpy as np
-from pathlib import Path
+import os
 from collections import defaultdict
+from pathlib import Path
+
+import numpy as np
 
 CACHE = Path(".scan-cache")
 PIPELINE = Path("pipeline-outputs")
@@ -334,7 +335,7 @@ def main():
 
         total_scan_time = all_events[-1][0] - all_events[0][0] if len(all_events) >= 2 else 0
         print(f"    Total scan duration: {total_scan_time:.0f}s ({total_scan_time/60:.1f}min)")
-        print(f"    Scan timeline:")
+        print("    Scan timeline:")
 
         prev_time = None
         for t, label, fl_type in all_events:

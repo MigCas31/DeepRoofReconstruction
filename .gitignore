@@ -1,0 +1,29 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Packaging/build artifacts
+build/
+dist/
+*.egg-info/
+
+# Local editor/system noise
+.DS_Store
+
+# Generated AI tool configs (source of truth is .agents/, synced via scripts/sync-ai-tools.sh)
+.claude/
+.codex/
+reconcile/__pycache__/
+reconcile/extract3d/__pycache__/
+reconcile/buildings_3d.tmp.json

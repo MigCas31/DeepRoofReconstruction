@@ -2,10 +2,11 @@
 """Analyze merged.json files for 8 problem buildings + 3 control buildings."""
 
 import json
-import numpy as np
 import os
 import random
 from collections import defaultdict
+
+import numpy as np
 
 BASE = "/Users/martincollignon/conductor/workspaces/look-ma-no-hands/tirana/pipeline-outputs"
 
@@ -371,7 +372,7 @@ def print_report(result):
         print(f"  Centroid: [{c[0]:.2f}, {c[1]:.2f}, {c[2]:.2f}]")
 
     if "story_y_ranges" in result:
-        print(f"  Story Y-ranges:")
+        print("  Story Y-ranges:")
         for s, v in sorted(result["story_y_ranges"].items()):
             print(f"    Story {s}: Y=[{v['min_y']:.3f}, {v['max_y']:.3f}], mean={v['mean_y']:.3f}")
 
@@ -403,7 +404,7 @@ def print_report(result):
         for iss in issues:
             print(f"    - {iss}")
     else:
-        print(f"\n  No issues detected.")
+        print("\n  No issues detected.")
 
 
 # ============================================================
@@ -460,7 +461,7 @@ for uuid, name in {**PROBLEM_BUILDINGS, **CONTROL_BUILDINGS}.items():
     yr = np.degrees(r.get("ref_yaw_range", 0))
     issues = len(r.get("issues", []))
     label = "CTRL" if "CONTROL" in name else "PROB"
-    print(f"[{label}] {name[:26]:<26} {r['num_rooms']:>5} {r['num_walls']:>5} {str(r.get('stories',{})):>8} {bb[0]:>7.2f} {bb[1]:>7.2f} {bb[2]:>7.2f} {rd:>8.2f} {yr:>7.1f}d {issues:>6}")
+    print(f"[{label}] {name[:26]:<26} {r['num_rooms']:>5} {r['num_walls']:>5} {r.get('stories',{})!s:>8} {bb[0]:>7.2f} {bb[1]:>7.2f} {bb[2]:>7.2f} {rd:>8.2f} {yr:>7.1f}d {issues:>6}")
 
 # Final issue tally
 print(f"\n{'Building':<30} Issues")

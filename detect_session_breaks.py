@@ -18,9 +18,8 @@ Analyses:
 
 import json
 import math
-import os
 import random
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -369,7 +368,7 @@ def print_report(label, r):
     # Y-offset issues
     y_issues = r.get("y_offset_issues", {})
     if y_issues:
-        print(f"\n  Y-offset issues (same story, different Y):")
+        print("\n  Y-offset issues (same story, different Y):")
         for story, info in y_issues.items():
             print(f"    Story {story}: Y range = {info['y_range_m']}m across {info['num_rooms']} rooms")
             for name, (y, sid) in info.get("room_y_session", {}).items():
@@ -378,7 +377,7 @@ def print_report(label, r):
     # Cross-session alignment
     alignment = r.get("cross_session_alignment", [])
     if alignment:
-        print(f"\n  Cross-session alignment:")
+        print("\n  Cross-session alignment:")
         for a in alignment:
             print(f"    Sessions {a['sessions']}: yaw_diff={a['yaw_diff_deg']}deg, "
                   f"min_dist={a['min_centroid_dist_m']}m, center_dist={a['center_dist_m']}m")
@@ -393,7 +392,7 @@ def print_report(label, r):
 
     # Verdict
     sessions = r["num_sessions"]
-    print(f"\n  VERDICT: ", end="")
+    print("\n  VERDICT: ", end="")
     if sessions > 1:
         print(f"** {sessions} ARKit SESSIONS DETECTED **")
         if sessions != r.get("recon_sessions"):
@@ -457,11 +456,11 @@ def main():
 
     prob_recon = [r.get("recon_sessions", 1) for l, r in all_results if l == "PROBLEM" and not r.get("error")]
     ctrl_recon = [r.get("recon_sessions", 1) for l, r in all_results if l == "CONTROL" and not r.get("error")]
-    print(f"\n  Reconciler session counts:")
+    print("\n  Reconciler session counts:")
     print(f"    Problem: {prob_recon}")
     print(f"    Control: {ctrl_recon}")
 
-    print(f"\n  Session count comparison (detected via yaw vs reconciler):")
+    print("\n  Session count comparison (detected via yaw vs reconciler):")
     for label, r in all_results:
         if r.get("error"):
             continue
@@ -469,7 +468,7 @@ def main():
         print(f"    {r['uuid'][:20]}.. {label:8s} yaw={r['num_sessions']} recon={r.get('recon_sessions')} {match}")
 
     # Session break impact analysis
-    print(f"\n  Buildings by session count and classification:")
+    print("\n  Buildings by session count and classification:")
     for label, r in all_results:
         if r.get("error"):
             continue

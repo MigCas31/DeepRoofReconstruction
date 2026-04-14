@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .cross_floor_gaps import CrossFloorGap, StoryFootprint
@@ -73,7 +73,7 @@ def write_reconciled(
     data = {
         "version": building.version,
         "reconciliation": {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "classification": quality_report.classification,
             "wall_count_merged": quality_report.wall_count_merged,
             "wall_count_scan": quality_report.wall_count_scan,

@@ -4,11 +4,11 @@ Final comprehensive summary combining all findings.
 """
 
 import json
-import os
 import math
-import numpy as np
+import os
 from pathlib import Path
-from collections import defaultdict
+
+import numpy as np
 
 CACHE = Path(".scan-cache")
 PIPELINE = Path("pipeline-outputs")
@@ -169,11 +169,11 @@ def main():
 
         # Print issues
         if issues:
-            print(f"\n    ISSUES DETECTED:")
+            print("\n    ISSUES DETECTED:")
             for iss in issues:
                 print(f"      - {iss}")
         else:
-            print(f"\n    No anomalies detected in rotation or Y-offset data.")
+            print("\n    No anomalies detected in rotation or Y-offset data.")
 
         findings.append({"name": name, "uuid": uuid, "issues": issues})
 

@@ -10,12 +10,12 @@ Checks for:
 """
 
 import json
-import os
-import sys
 import math
-import numpy as np
-from pathlib import Path
+import os
 from collections import defaultdict
+from pathlib import Path
+
+import numpy as np
 
 CACHE = Path(".scan-cache")
 PIPELINE = Path("pipeline-outputs")
@@ -416,7 +416,7 @@ def print_report(results):
 
         # Inter-floor gaps
         if "inter_floor_gaps" in r:
-            print(f"\n  INTER-FLOOR GAPS:")
+            print("\n  INTER-FLOOR GAPS:")
             for gap, ft1, ft2 in r["inter_floor_gaps"]:
                 flag = " *** LARGE GAP ***" if gap > 3600 else ""
                 print(f"    {ft1} -> {ft2}: {gap:.0f}s ({gap/60:.1f}min){flag}")
@@ -430,13 +430,13 @@ def print_report(results):
                 print(f"      Before: room '{g['before'][1]}' on {g['before'][2]} floor (t={g['before'][0]})")
                 print(f"      After:  room '{g['after'][1]}' on {g['after'][2]} floor (t={g['after'][0]})")
         else:
-            print(f"\n  TIMESTAMP GAPS > 5 MIN: None")
+            print("\n  TIMESTAMP GAPS > 5 MIN: None")
 
         # Reference origin variations (from room JSONs)
         ref_var = r.get("ref_origin_variation_by_story", {})
-        print(f"\n  REFERENCE ORIGIN TRANSFORM VARIATION (room JSONs, per story):")
+        print("\n  REFERENCE ORIGIN TRANSFORM VARIATION (room JSONs, per story):")
         if not ref_var:
-            print(f"    No multi-room stories found")
+            print("    No multi-room stories found")
         for story, v in sorted(ref_var.items()):
             flag = " *** DIFFERENT REF ORIGINS ***" if not v["all_identical"] else ""
             print(f"    Story {story}: {v['num_rooms']} rooms, max_trans_diff={v['max_translation_diff_m']:.6f}m, max_rot_diff={v['max_rotation_diff_deg']:.4f}deg{flag}")
@@ -446,7 +446,7 @@ def print_report(results):
         # Merged.json ref origin variation
         merged_var = r.get("merged_ref_origin_variation_by_story", {})
         if merged_var:
-            print(f"\n  MERGED.JSON REFERENCE ORIGIN VARIATION (per story):")
+            print("\n  MERGED.JSON REFERENCE ORIGIN VARIATION (per story):")
             for story, v in sorted(merged_var.items()):
                 flag = " *** DIFFERENT ***" if not v["all_identical"] else ""
                 print(f"    Story {story}: {v['num_rooms']} rooms, max_trans_diff={v['max_translation_diff_m']:.6f}m, max_rot_diff={v['max_rotation_diff_deg']:.4f}deg{flag}")
@@ -458,7 +458,7 @@ def print_report(results):
             for j in az_jumps:
                 print(f"    Story {j['story']}: azimuth {j['az_prev']} -> {j['az_curr']}: {j['translation_jump_m']:.2f}m jump")
         else:
-            print(f"\n  AZIMUTH TRANSFORM JUMPS > 5m: None")
+            print("\n  AZIMUTH TRANSFORM JUMPS > 5m: None")
 
         # ARWorldMap
         wm = r.get("arworldmap", {})

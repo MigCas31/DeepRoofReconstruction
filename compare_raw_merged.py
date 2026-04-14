@@ -5,9 +5,8 @@ to detect reconstruction issues.
 """
 
 import json
-import os
 import math
-import glob as glob_mod
+import os
 
 BASE = "/Users/martincollignon/conductor/workspaces/look-ma-no-hands/tirana"
 SCAN_CACHE = os.path.join(BASE, ".scan-cache")
@@ -84,7 +83,7 @@ def load_raw_rooms(scan_dir_path):
                 data = json.load(f)
             room_id = fname.replace(".json", "")
             rooms[room_id] = data
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             pass
     return rooms
 
@@ -178,7 +177,7 @@ def analyze_building(short_uuid, info):
     # --- Analysis ---
 
     # 1) Check for raw rooms that got dropped entirely
-    print(f"\n  --- Raw Room Summaries ---")
+    print("\n  --- Raw Room Summaries ---")
     for room_id, summary in sorted(raw_room_summaries.items()):
         print(f"    Room '{room_id}': story={summary['story']}, "
               f"walls={summary['num_walls']}, doors={summary['num_doors']}, "
@@ -192,7 +191,7 @@ def analyze_building(short_uuid, info):
     extra_walls = merged_wall_ids - raw_wall_ids
     common_walls = raw_wall_ids & merged_wall_ids
 
-    print(f"\n  --- Wall UUID Comparison ---")
+    print("\n  --- Wall UUID Comparison ---")
     print(f"    Raw wall UUIDs:    {len(raw_wall_ids)}")
     print(f"    Merged wall UUIDs: {len(merged_wall_ids)}")
     print(f"    Common:            {len(common_walls)}")
@@ -205,7 +204,7 @@ def analyze_building(short_uuid, info):
         for wid in missing_walls:
             rid = raw_wall_index[wid]["room_id"]
             missing_by_room.setdefault(rid, []).append(wid)
-        print(f"\n    Walls DROPPED from merged, by source room:")
+        print("\n    Walls DROPPED from merged, by source room:")
         for rid, wids in sorted(missing_by_room.items()):
             total_walls_in_room = raw_room_summaries[rid]["num_walls"]
             print(f"      Room '{rid}' (story {raw_room_summaries[rid]['story']}): "
@@ -229,7 +228,7 @@ def analyze_building(short_uuid, info):
                   f"doors={s['num_doors']}, windows={s['num_windows']}")
 
     # 3) For common walls: compute position differences
-    print(f"\n  --- Wall Position Differences (raw vs merged) ---")
+    print("\n  --- Wall Position Differences (raw vs merged) ---")
     large_diffs = []
     all_diffs = []
 
@@ -268,7 +267,7 @@ def analyze_building(short_uuid, info):
 
     if large_diffs:
         large_diffs.sort(key=lambda x: -x["distance"])
-        print(f"\n    *** TOP WALLS WITH LARGE POSITION CHANGES (>1m): ***")
+        print("\n    *** TOP WALLS WITH LARGE POSITION CHANGES (>1m): ***")
         for entry in large_diffs[:20]:
             dx = entry["merged_pos"][0] - entry["raw_pos"][0]
             dy = entry["merged_pos"][1] - entry["raw_pos"][1]
@@ -278,7 +277,7 @@ def analyze_building(short_uuid, info):
             print(f"        dist={entry['distance']:.2f}m  dx={dx:.2f} dy={dy:.2f} dz={dz:.2f}")
 
     # 4) Check for rooms whose walls got scattered across multiple stories
-    print(f"\n  --- Story Consistency Check ---")
+    print("\n  --- Story Consistency Check ---")
     for room_id in sorted(raw_room_summaries.keys()):
         raw_story = raw_room_summaries[room_id]["story"]
         room_walls = [wid for wid, info in raw_wall_index.items() if info["room_id"] == room_id]
@@ -301,7 +300,7 @@ def analyze_building(short_uuid, info):
                   f"merged room indices {merged_room_indices}")
 
     # 5) Per-room transform analysis: check if the room's referenceOriginTransform changed dramatically
-    print(f"\n  --- Room-Level Transform Comparison ---")
+    print("\n  --- Room-Level Transform Comparison ---")
     # Try to match raw rooms to merged rooms by wall overlap
     for room_id in sorted(raw_room_summaries.items(), key=lambda x: x[0]):
         room_id = room_id[0]

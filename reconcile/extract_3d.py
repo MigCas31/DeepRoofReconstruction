@@ -621,7 +621,7 @@ def _compute_cross_floor_gaps(rooms_out):
     """
     from shapely import STRtree
 
-    WALL_HALF = 0.20   # half-wall buffer for morphological close (Phase 1)
+    WALL_HALF = 0.25   # half-wall buffer for morphological close (Phase 1)
     PAIR_HALF = 0.50   # half-wall buffer for pairwise intersect (Phase 2)
     MAX_GAP = 1.00     # max gap width for pairwise check
     MIN_AREA = 0.005   # minimum gap area in m²
@@ -696,18 +696,23 @@ def _compute_cross_floor_gaps(rooms_out):
 
         footprint = story_footprints[story]
         floor_y = story_y_map[story]
-        all_gap_parts = []
+        morph_gap_parts = []
+        hole_gap_parts = []
 
         # Phase 1: Morphological close → enclosed voids (tight buffer)
         closed = make_valid(footprint.buffer(WALL_HALF, join_style=2).buffer(-WALL_HALF, join_style=2))
         morph_gaps = make_valid(closed.difference(footprint))
-        all_gap_parts.extend(_decompose_polys(morph_gaps))
+        morph_gap_parts.extend(_decompose_polys(morph_gaps))
 
+        # Interior holes in the closed polygon are gaps fully enclosed by
+        # the building footprint (e.g. thick walls, closets, fireplaces).
+        # These must NOT be clipped back to `closed` — they live inside its
+        # holes and would be erased.
         for poly_part in _decompose_polys(closed):
             for interior in poly_part.interiors:
                 hole = Polygon(interior)
                 if hole.is_valid and hole.area > MIN_AREA:
-                    all_gap_parts.append(hole)
+                    hole_gap_parts.append(hole)
 
         # Phase 2: Pairwise buffer-intersect for adjacent room gaps (wider buffer)
         tree = STRtree(polys)
@@ -739,18 +744,25 @@ def _compute_cross_floor_gaps(rooms_out):
         # the tight morphological close)
         wide_closed = make_valid(footprint.buffer(PAIR_HALF, join_style=2).buffer(-PAIR_HALF, join_style=2))
 
-        # Emit Phase 1 gaps clipped to tight envelope
-        if all_gap_parts:
-            merged = make_valid(unary_union(all_gap_parts))
+        all_phase1_parts = morph_gap_parts + hole_gap_parts
+
+        # Emit Phase 1 morph gaps clipped to tight envelope
+        if morph_gap_parts:
+            merged = make_valid(unary_union(morph_gap_parts))
             _emit_gaps(_decompose_polys(merged), story, floor_y, "within_story", clip_to=closed)
+
+        # Emit interior hole gaps without clipping (already bounded by closed)
+        if hole_gap_parts:
+            merged_holes = make_valid(unary_union(hole_gap_parts))
+            _emit_gaps(_decompose_polys(merged_holes), story, floor_y, "within_story")
 
         # Emit Phase 2 gaps clipped to wider envelope, excluding Phase 1 areas
         if pair_gap_parts:
             pair_merged = make_valid(unary_union(pair_gap_parts))
             # Remove anything already covered by Phase 1
-            if all_gap_parts:
+            if all_phase1_parts:
                 try:
-                    pair_merged = make_valid(pair_merged.difference(unary_union(all_gap_parts)))
+                    pair_merged = make_valid(pair_merged.difference(unary_union(all_phase1_parts)))
                 except Exception:
                     pass
             _emit_gaps(_decompose_polys(pair_merged), story, floor_y, "within_story", clip_to=wide_closed)
@@ -772,6 +784,90 @@ def _compute_cross_floor_gaps(rooms_out):
             _emit_gaps(_decompose_polys(missing), story, floor_y, "cross_story")
 
     return gaps
+
+
+def _assign_gaps_to_rooms(gaps, rooms_out):
+    """Assign within-story gaps to their nearest room and expand floor polygons.
+
+    Each gap polygon is unioned into the nearest room's floor_polygon so the
+    ceiling pipeline (build_flat_ceilings) covers the previously-unclaimed area.
+    Also stores ``room_index`` on the gap dict for downstream propagation to
+    gap walls.
+    """
+    # Build Shapely polygons for each room's floor
+    room_shapely = []
+    for ri, room in enumerate(rooms_out):
+        poly = _floor_polygon_to_shapely(room.get("floor_polygon", []))
+        room_shapely.append((ri, poly))
+
+    for gap in gaps:
+        if gap["type"] != "within_story":
+            continue
+        corners_3d = gap["corners"]
+        if len(corners_3d) < 3:
+            continue
+
+        gap_poly = _floor_polygon_to_shapely(corners_3d)
+        if gap_poly is None:
+            continue
+
+        story = gap["story"]
+        gap_centroid = gap_poly.centroid
+
+        # Find nearest room on the same story by Shapely distance
+        best_ri = None
+        best_dist = float("inf")
+        for ri, rpoly in room_shapely:
+            if rpoly is None or rooms_out[ri]["story"] != story:
+                continue
+            d = rpoly.distance(gap_centroid)
+            if d < best_dist:
+                best_dist = d
+                best_ri = ri
+
+        if best_ri is None:
+            continue
+
+        gap["room_index"] = best_ri
+
+        # Compute ceiling_corners: gap polygon raised to the assigned room's
+        # median wall-top Y so the viewer renders gap thermal ceilings at the
+        # correct height instead of at floor level.
+        assigned_room = rooms_out[best_ri]
+        wall_top_ys = []
+        for w in (assigned_room.get("walls_computed") or assigned_room.get("walls_merged", [])):
+            cs = w.get("corners", [])
+            if cs:
+                wall_top_ys.append(max(c[1] for c in cs))
+        if wall_top_ys:
+            ceiling_y = round(float(np.median(wall_top_ys)), 4)
+        else:
+            ceiling_y = corners_3d[0][1]  # fallback: floor Y
+        gap["ceiling_corners"] = [
+            [round(c[0], 4), ceiling_y, round(c[2], 4)] for c in corners_3d
+        ]
+
+        # Expand that room's floor polygon to include the gap
+        room = assigned_room
+        room_poly = room_shapely[best_ri][1]
+        if room_poly is None:
+            continue
+
+        floor_y = room["floor_polygon"][0][1] if room["floor_polygon"] else corners_3d[0][1]
+        merged = make_valid(unary_union([room_poly, gap_poly]))
+
+        # Extract the largest polygon from the union result
+        if isinstance(merged, MultiPolygon):
+            merged = max(merged.geoms, key=lambda g: g.area)
+
+        # Convert back to 3D floor polygon
+        coords_2d = list(merged.exterior.coords)
+        if coords_2d and coords_2d[0] == coords_2d[-1]:
+            coords_2d = coords_2d[:-1]
+        room["floor_polygon"] = [[round(c[0], 4), floor_y, round(c[1], 4)] for c in coords_2d]
+
+        # Update the cached Shapely polygon for subsequent gap assignments
+        room_shapely[best_ri] = (best_ri, merged)
 
 
 def _compute_gap_walls(gaps, rooms_out, story_y_map, gap_closures=None):
@@ -946,7 +1042,7 @@ def _compute_gap_walls(gaps, rooms_out, story_y_map, gap_closures=None):
             c1 = corners_3d[j]
             _, ytop0 = vertex_ys[ei]
             _, ytop1 = vertex_ys[j]
-            walls.append({
+            gw = {
                 "corners": [
                     [c0[0], gap_floor_y, c0[2]],  # BL
                     [c1[0], gap_floor_y, c1[2]],  # BR
@@ -956,7 +1052,10 @@ def _compute_gap_walls(gaps, rooms_out, story_y_map, gap_closures=None):
                 "type": gap["type"],
                 "story": story,
                 "confidence": gap["confidence"],
-            })
+            }
+            if "room_index" in gap:
+                gw["room_index"] = gap["room_index"]
+            walls.append(gw)
 
     return walls
 
@@ -1301,7 +1400,7 @@ def _detect_exterior_gap_indicators(rooms_out):
     - For storages: only match walls from a *different* room (same-room wall is just the backing wall)
     - Keep the closest matching wall, assign confidence
     """
-    MIN_WIDTH = 1.0
+    MIN_WIDTH = 0.50
     MIN_DIST = 0.20
     MAX_DIST = 1.0
     MAX_ANGLE = 15.0
@@ -1451,7 +1550,7 @@ def _detect_exterior_gap_indicators(rooms_out):
                 dist = float(np.linalg.norm(sp - closest))
                 if dist < STORAGE_WALL_PROXIMITY + elem_width * 0.5 + _wall_xz_length(wc) * 0.0:
                     # More precise: perpendicular distance from storage center to wall line
-                    perp_dist = float(np.abs(np.cross(edge, sp - w0))) / elen
+                    perp_dist = float(abs(edge[0] * (sp - w0)[1] - edge[1] * (sp - w0)[0])) / elen
                     if perp_dist < STORAGE_WALL_PROXIMITY:
                         flush = True
                         break
@@ -1792,6 +1891,9 @@ def _stitch_wall_gaps(rooms_out):
             if y_top - y_bot < MIN_WALL_HEIGHT:
                 continue
 
+            ri1, wi1 = wk1
+            ri2, wi2 = wk2
+
             stitch_walls.append({
                 "corners": [
                     [x1, y_bot, z1],
@@ -1801,6 +1903,53 @@ def _stitch_wall_gaps(rooms_out):
                 ],
                 "story": story,
                 "type": "stitch",
+                "room_index": ri1,
+                "room_indices": [ri1, ri2],
+            })
+
+            # Floor and ceiling caps: extend a small quad along each parent
+            # wall's direction to seal the top and bottom of the stitch gap.
+            CAP_REACH = 0.20
+            w1c = rooms_out[ri1]["walls_computed"][wi1]["corners"]
+            w2c = rooms_out[ri2]["walls_computed"][wi2]["corners"]
+
+            def _wall_dir(corners):
+                dx = corners[1][0] - corners[0][0]
+                dz = corners[1][2] - corners[0][2]
+                ln = math.hypot(dx, dz)
+                return (dx / ln, dz / ln) if ln > 1e-6 else (0.0, 0.0)
+
+            d1 = _wall_dir(w1c)
+            d2 = _wall_dir(w2c)
+            # Inward direction: end==0 -> +dir, end==1 -> -dir
+            s1 = 1.0 if ei1 == 0 else -1.0
+            s2 = 1.0 if ei2 == 0 else -1.0
+            reach = min(CAP_REACH, best_dist)
+
+            ix1 = x1 + s1 * d1[0] * reach
+            iz1 = z1 + s1 * d1[1] * reach
+            ix2 = x2 + s2 * d2[0] * reach
+            iz2 = z2 + s2 * d2[1] * reach
+
+            stitch_walls.append({
+                "corners": [
+                    [x1, y_bot, z1], [x2, y_bot, z2],
+                    [ix2, y_bot, iz2], [ix1, y_bot, iz1],
+                ],
+                "story": story,
+                "type": "stitch_floor",
+                "room_index": ri1,
+                "room_indices": [ri1, ri2],
+            })
+            stitch_walls.append({
+                "corners": [
+                    [x1, y_top, z1], [x2, y_top, z2],
+                    [ix2, y_top, iz2], [ix1, y_top, iz1],
+                ],
+                "story": story,
+                "type": "stitch_ceiling",
+                "room_index": ri1,
+                "room_indices": [ri1, ri2],
             })
 
     return stitch_walls
@@ -2277,6 +2426,9 @@ def extract_building(uuid, pipeline_dir, scan_cache_root):
     # Cross-floor gap detection from floor polygons
     cross_floor_gaps_out = _compute_cross_floor_gaps(rooms_out)
 
+    # Assign within-story gaps to nearest rooms and expand floor polygons
+    _assign_gaps_to_rooms(cross_floor_gaps_out, rooms_out)
+
     # Detect exterior gap indicators from doors/openings
     exterior_gap_indicators = _detect_exterior_gap_indicators(rooms_out)
 
@@ -2392,7 +2544,7 @@ def main():
                   f"{merged_total} merged walls, "
                   f"{result['scan_rooms_found']} scan rooms ({result['scan_rooms_transformed']} transformed)")
         else:
-            print(f"  SKIPPED (no merged.json)")
+            print("  SKIPPED (no merged.json)")
 
     out_path = Path("reconcile/buildings_3d.json")
     with open(out_path, "w") as f:

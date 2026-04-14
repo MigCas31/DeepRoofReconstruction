@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import argparse
-import os
-import sys
 from copy import deepcopy
 from pathlib import Path
 
 from .cross_floor_gaps import detect_cross_floor_gaps
 from .floor_gaps import compute_wall_thicknesses
-from .loader import load_merged, load_scan_cache, find_scan_cache_for_building, count_scan_sessions
-from .matcher import match_elements, match_summary, compute_wall_displacement
+from .loader import (
+    count_scan_sessions,
+    load_merged,
+    load_scan_cache,
+)
+from .matcher import compute_wall_displacement, match_elements, match_summary
 from .output import write_reconciled
 from .story_fix import fix_building_stories
 from .trust_merge import apply_trust_table

@@ -21,12 +21,12 @@ This script:
 """
 
 import json
-import os
 import math
-import numpy as np
-from pathlib import Path
+import os
 from collections import defaultdict
-from datetime import datetime
+from pathlib import Path
+
+import numpy as np
 
 CACHE = Path(".scan-cache")
 PIPELINE = Path("pipeline-outputs")
@@ -331,22 +331,22 @@ def main():
     t_restart_count = sum(1 for r in target_results if r["has_session_restart_evidence"])
     c_restart_count = sum(1 for r in control_results if r["has_session_restart_evidence"])
 
-    print(f"\n  Buildings with session restart evidence:")
+    print("\n  Buildings with session restart evidence:")
     print(f"    TARGETS:  {t_restart_count}/{len(target_results)} ({100*t_restart_count/len(target_results):.0f}%)")
     print(f"    CONTROLS: {c_restart_count}/{len(control_results)} ({100*c_restart_count/len(control_results):.0f}%)")
 
-    print(f"\n  Max rotation difference across any floor:")
+    print("\n  Max rotation difference across any floor:")
     print(f"    TARGETS:  mean={np.mean(t_max_rots):.2f}deg, median={np.median(t_max_rots):.2f}deg, "
           f"max={np.max(t_max_rots):.2f}deg, min={np.min(t_max_rots):.2f}deg")
     print(f"    CONTROLS: mean={np.mean(c_max_rots):.2f}deg, median={np.median(c_max_rots):.2f}deg, "
           f"max={np.max(c_max_rots):.2f}deg, min={np.min(c_max_rots):.2f}deg")
 
-    print(f"\n  Per-building max rotation diffs:")
-    print(f"    TARGETS:")
+    print("\n  Per-building max rotation diffs:")
+    print("    TARGETS:")
     for r in sorted(target_results, key=lambda x: -x["max_rotation_diff_any_floor"]):
         flag = " *** RESTART ***" if r["has_session_restart_evidence"] else ""
         print(f"      {r['name']:<35} {r['max_rotation_diff_any_floor']:>8.2f} deg{flag}")
-    print(f"    CONTROLS:")
+    print("    CONTROLS:")
     for r in sorted(control_results, key=lambda x: -x["max_rotation_diff_any_floor"]):
         flag = " *** RESTART ***" if r["has_session_restart_evidence"] else ""
         print(f"      {r['name']:<35} {r['max_rotation_diff_any_floor']:>8.2f} deg{flag}")
@@ -388,9 +388,9 @@ def main():
             print(f"    Story {story}: {len(room_data)} rooms, max_rot_diff={max_rot:.4f}deg, "
                   f"yaw range=[{min(yaws):.2f}, {max(yaws):.2f}]")
             if max_rot > 1.0:
-                print(f"      *** MERGED.JSON ALSO SHOWS SESSION INCONSISTENCY ***")
+                print("      *** MERGED.JSON ALSO SHOWS SESSION INCONSISTENCY ***")
             else:
-                print(f"      merged.json has consistent rotations (merging pipeline may have compensated)")
+                print("      merged.json has consistent rotations (merging pipeline may have compensated)")
 
     # === VERDICT ===
     print()
@@ -399,7 +399,7 @@ def main():
     print("=" * 120)
     print()
     print(f"  Of the 8 target buildings, {t_restart_count} show clear evidence of ARSession restarts")
-    print(f"  (rotation differences > 1 degree between rooms on the same floor).")
+    print("  (rotation differences > 1 degree between rooms on the same floor).")
     print()
     print(f"  Of the {len(control_results)} control buildings, {c_restart_count} show session restart evidence.")
     print()

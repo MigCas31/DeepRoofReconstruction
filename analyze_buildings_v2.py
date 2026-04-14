@@ -2,9 +2,10 @@
 """Deeper analysis: per-story wall/floor Y positions, room-level geometry, cross-floor gaps."""
 
 import json
-import numpy as np
 import os
 from collections import defaultdict
+
+import numpy as np
 
 BASE = "/Users/martincollignon/conductor/workspaces/look-ma-no-hands/tirana/pipeline-outputs"
 
@@ -47,7 +48,7 @@ def analyze(uuid, name):
     print(f"  {len(rooms)} rooms, {len(data.get('walls',[]))} top-level walls, stories: {stories_set}")
 
     # Per-room analysis: wall Y positions grouped by story
-    print(f"\n  --- Per-Room Wall Y-coordinate Analysis (grouped by story) ---")
+    print("\n  --- Per-Room Wall Y-coordinate Analysis (grouped by story) ---")
     story_wall_ys = defaultdict(list)
     story_floor_ys = defaultdict(list)
     story_room_centroids = defaultdict(list)
@@ -87,14 +88,14 @@ def analyze(uuid, name):
             print(f"    Wall Y: min={min(ys):.3f}, max={max(ys):.3f}, mean={np.mean(ys):.3f}, range={max(ys)-min(ys):.3f}")
             if fys:
                 print(f"    Floor Y: min={min(fys):.3f}, max={max(fys):.3f}, mean={np.mean(fys):.3f}")
-            print(f"    Room centroids (Y):")
+            print("    Room centroids (Y):")
             for idx, cy, miny, maxy in centroids:
                 n_walls = len(rooms[idx].get("walls", []))
                 print(f"      Room {idx}: centroid_y={cy:.3f}, wall_y_range=[{miny:.3f}, {maxy:.3f}], {n_walls} walls")
 
     # Cross-story overlap check using actual wall positions
     if len(stories_set) > 1:
-        print(f"\n  --- Cross-Story Y Overlap Analysis ---")
+        print("\n  --- Cross-Story Y Overlap Analysis ---")
         story_ranges = {}
         for s in stories_set:
             ys = story_wall_ys.get(s, [])
@@ -117,7 +118,7 @@ def analyze(uuid, name):
                         print(f"    Story {s1} <-> {s2}: separation = {sep:.3f}m, mean gap = {gap:.3f}m")
 
     # Top-level wall analysis per story
-    print(f"\n  --- Top-Level Walls Per Story ---")
+    print("\n  --- Top-Level Walls Per Story ---")
     top_wall_story_ys = defaultdict(list)
     top_wall_story_xz = defaultdict(list)
     for w in data.get("walls", []):
@@ -135,7 +136,7 @@ def analyze(uuid, name):
 
     # XZ footprint overlap between stories (do rooms on different stories share the same floorplan area?)
     if len(stories_set) > 1:
-        print(f"\n  --- XZ Footprint Per Story ---")
+        print("\n  --- XZ Footprint Per Story ---")
         for s in stories_set:
             xzs = np.array(top_wall_story_xz.get(s, []))
             if len(xzs) > 0:
@@ -144,7 +145,7 @@ def analyze(uuid, name):
     # Check sections data for story info
     sections = data.get("sections", [])
     if sections:
-        print(f"\n  --- Sections ---")
+        print("\n  --- Sections ---")
         for sec in sections:
             center = sec.get("center", [])
             label = sec.get("label", "?")
@@ -152,7 +153,7 @@ def analyze(uuid, name):
             print(f"    Section '{label}', story={story}, center={center}")
 
     # Look for rooms with extreme wall spreads (might indicate bad merging)
-    print(f"\n  --- Rooms with Large Wall Spread (potential merge artifacts) ---")
+    print("\n  --- Rooms with Large Wall Spread (potential merge artifacts) ---")
     for i, room in enumerate(rooms):
         story = room.get("story", -1)
         walls = room.get("walls", [])

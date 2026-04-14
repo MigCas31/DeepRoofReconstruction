@@ -3,9 +3,10 @@
 
 import json
 import math
-import numpy as np
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
+
+import numpy as np
 
 BASE = Path("pipeline-outputs")
 
@@ -449,14 +450,14 @@ def main():
 
     prob_y = [r["wall_y_spread"] for r in problem_results.values()]
     ref_y = [r["wall_y_spread"] for r in reference_results.values()]
-    print(f"\n  Problem buildings Y-spread:")
+    print("\n  Problem buildings Y-spread:")
     print(f"    mean={np.mean(prob_y):.3f}m, median={np.median(prob_y):.3f}m, "
           f"range=[{min(prob_y):.3f}, {max(prob_y):.3f}]")
     for uuid, r in sorted(problem_results.items(), key=lambda x: x[1]["wall_y_spread"], reverse=True):
         print(f"    {r['name']:<28} Y-spread={r['wall_y_spread']:.3f}m  "
               f"Y-range=[{r.get('wall_y_range', (0,0))[0]:.2f}, {r.get('wall_y_range', (0,0))[1]:.2f}]")
 
-    print(f"\n  Reference buildings Y-spread:")
+    print("\n  Reference buildings Y-spread:")
     print(f"    mean={np.mean(ref_y):.3f}m, median={np.median(ref_y):.3f}m, "
           f"range=[{min(ref_y):.3f}, {max(ref_y):.3f}]")
     for uuid, r in sorted(reference_results.items(), key=lambda x: x[1]["wall_y_spread"], reverse=True):

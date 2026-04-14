@@ -2,9 +2,8 @@
 """Analyze 8 problem buildings vs 5 random GREEN/YELLOW buildings."""
 
 import json
-import random
 import math
-import sys
+import random
 from collections import defaultdict
 
 random.seed(42)
@@ -239,19 +238,19 @@ def print_building_report(uuid, info, label=""):
         print(f"  Floor gap count: {info.get('floor_gap_count')}  |  Floor gap median: {fmt(info.get('floor_gap_median_cm'))} cm")
         print(f"  Flagged count: {info.get('flagged_count')}")
 
-    print(f"\n  --- Spatial Extent ---")
+    print("\n  --- Spatial Extent ---")
     print(f"  BBox X: [{fmt(info['bbox_x'][0])}, {fmt(info['bbox_x'][1])}]  extent={fmt(info['extent_x'])} m")
     print(f"  BBox Y: [{fmt(info['bbox_y'][0])}, {fmt(info['bbox_y'][1])}]  extent={fmt(info['extent_y'])} m (vertical)")
     print(f"  BBox Z: [{fmt(info['bbox_z'][0])}, {fmt(info['bbox_z'][1])}]  extent={fmt(info['extent_z'])} m")
     print(f"  Centroid: ({fmt(info['centroid'][0])}, {fmt(info['centroid'][1])}, {fmt(info['centroid'][2])})")
 
-    print(f"\n  --- Story Height Ranges (Y axis) ---")
+    print("\n  --- Story Height Ranges (Y axis) ---")
     for s, sr in sorted(info.get("story_ranges", {}).items()):
         print(f"    Story {s}: Y=[{fmt(sr['min_y'])}, {fmt(sr['max_y'])}]  range={fmt(sr['range_y'])} m")
     if info.get("story_overlaps"):
         print(f"  *** STORY OVERLAPS: {info['story_overlaps']}")
 
-    print(f"\n  --- Room Distance from Centroid ---")
+    print("\n  --- Room Distance from Centroid ---")
     print(f"  Median room dist: {fmt(info.get('median_room_dist'))} m  |  Max: {fmt(info.get('max_room_dist'))} m")
     print(f"  Outlier rooms (>2x median): {info.get('outlier_rooms_count')}")
     for r in info.get("outlier_rooms", []):

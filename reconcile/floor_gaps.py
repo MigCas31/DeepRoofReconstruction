@@ -4,12 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import numpy as np
 from shapely.geometry import LineString, Point, Polygon
 
 from .models import Building, Room
 from .transform import (
-    corners_to_world,
     edge_angle_diff,
     edge_overlap_fraction,
     edge_perpendicular_distance,
