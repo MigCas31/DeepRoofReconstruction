@@ -6,6 +6,7 @@ from reconcile.roof_algorithms_py.roof_hypothesis_graph import (
 )
 from reconcile.roof_algorithms_py.roof_partitioning import (
     derive_room_ceiling_partitions,
+    inject_simple_slant_partitions,
 )
 from reconcile_v2.models import GraphEdge, GraphNode, TopologyGraph
 
@@ -174,7 +175,7 @@ def test_room_ceiling_partitions_split_by_selected_hypotheses() -> None:
         hypothesis_graph=hypothesis_graph,
     )
     partitions = derive_room_ceiling_partitions(
-        exposed_rooms=exposed_rooms,
+        room_records=exposed_rooms,
         oblique_roof_surfaces=selected_oblique,
         flat_roof_surfaces=selected_flat,
         hypothesis_graph=hypothesis_graph,
@@ -248,7 +249,7 @@ def test_room_ceiling_partitions_split_by_globally_selected_competing_surface() 
     }
 
     partitions = derive_room_ceiling_partitions(
-        exposed_rooms=exposed_rooms,
+        room_records=exposed_rooms,
         oblique_roof_surfaces=oblique_surfaces,
         flat_roof_surfaces=flat_surfaces,
         hypothesis_graph=hypothesis_graph,
@@ -281,6 +282,7 @@ def test_room_ceiling_partitions_fallback_to_graph_footprint_when_raw_polygon_is
             "floorY": 0.0,
             "wallTopY": 3.0,
             "wallTopMin": 2.5,
+            "wallTopYs": [3.0, 3.0, 3.0, 3.0],
         }
     ]
     hypothesis_graph = {
@@ -291,7 +293,7 @@ def test_room_ceiling_partitions_fallback_to_graph_footprint_when_raw_polygon_is
     }
 
     partitions = derive_room_ceiling_partitions(
-        exposed_rooms=exposed_rooms,
+        room_records=exposed_rooms,
         oblique_roof_surfaces=[],
         flat_roof_surfaces=[],
         hypothesis_graph=hypothesis_graph,
@@ -302,6 +304,203 @@ def test_room_ceiling_partitions_fallback_to_graph_footprint_when_raw_polygon_is
     assert room["partition_count"] == 1
     assert room["partitions"][0]["kind"] == "flat"
     assert round(room["partitions"][0]["area_m2"], 3) == 16.0
+    assert room["partitions"][0]["flat_role"] == "implicit_room_shell_cap"
+    assert room["partitions"][0]["top_y_m"] == 3.0
+
+
+def test_room_ceiling_partitions_reject_floor_level_flat_candidates() -> None:
+    exposed_rooms = [
+        {
+            "room_index": 0,
+            "story": 0,
+            "graph_room_id": "room:r0",
+            "fp": _rect(0.0, 0.0, 4.0, 4.0),
+            "floorY": 0.0,
+            "wallTopY": 3.5,
+            "wallTopMin": 2.5,
+            "wallTopYs": [2.5, 2.5, 3.5, 3.5],
+        }
+    ]
+    oblique_surfaces = [
+        {
+            "roof_hypothesis_id": "roof-hypothesis:oblique:0",
+            "dominant_story": 0,
+            "corners": [
+                [0.0, 2.5, 0.0],
+                [4.0, 3.5, 0.0],
+                [4.0, 3.5, 4.0],
+                [0.0, 2.5, 4.0],
+            ],
+            "center": {"x": 2.0, "y": 3.0, "z": 2.0},
+            "cluster": {
+                "avgAzimuth": 90.0,
+                "avgIncl": 14.0,
+                "room_indices": [0],
+                "segs": [{}, {}, {}, {}],
+            },
+        }
+    ]
+    flat_surfaces = [
+        {
+            "roof_hypothesis_id": "roof-hypothesis:flat:0",
+            "kind": "intermediate",
+            "story": 0,
+            "room_index": 0,
+            "y": 0.0,
+            "corners": _rect(0.0, 0.0, 4.0, 4.0, y=0.0),
+        }
+    ]
+    hypothesis_graph = {
+        "nodes": [
+            {"id": "roof-hypothesis:oblique:0", "type": "RoofHypothesis", "surface_kind": "oblique", "story": 0, "selected": True},
+            {"id": "roof-hypothesis:flat:0", "type": "RoofHypothesis", "surface_kind": "flat", "story": 0, "selected": True},
+        ],
+        "edges": [
+            {
+                "id": "edge:covers:flat",
+                "type": "COVERS_ROOM",
+                "from": "roof-hypothesis:flat:0",
+                "to": "room:0",
+                "selected": True,
+                "evidence": {"edge_score": 0.8},
+            }
+        ],
+        "selected_hypothesis_ids": ["roof-hypothesis:oblique:0", "roof-hypothesis:flat:0"],
+        "selected_room_assignments": {"room:0": ["roof-hypothesis:flat:0", "roof-hypothesis:oblique:0"]},
+    }
+
+    partitions = derive_room_ceiling_partitions(
+        room_records=exposed_rooms,
+        oblique_roof_surfaces=oblique_surfaces,
+        flat_roof_surfaces=flat_surfaces,
+        hypothesis_graph=hypothesis_graph,
+    )
+
+    room = partitions["room_partitions"][0]
+    assert all(partition["kind"] == "oblique" for partition in room["partitions"])
+    assert partitions["metadata"]["rejected_flat_candidate_count"] == 1
+    assert partitions["metadata"]["flat_partition_count"] == 0
+
+
+def test_room_ceiling_partitions_create_exact_flat_atom_for_non_exposed_room() -> None:
+    room_records = [
+        {
+            "room_index": 0,
+            "story": 0,
+            "graph_room_id": "room:r0",
+            "fp": _rect(0.0, 0.0, 4.0, 4.0),
+            "floorY": 0.0,
+            "wallTopY": 2.8,
+            "wallTopMin": 2.8,
+            "wallTopYs": [2.8, 2.8, 2.8, 2.8],
+            "is_roof_candidate": False,
+            "top_boundary_mode": "ceiling_below_occupied_volume",
+            "top_boundary_reason": "occupied_cell_above",
+        }
+    ]
+    partitions = derive_room_ceiling_partitions(
+        room_records=room_records,
+        oblique_roof_surfaces=[],
+        flat_roof_surfaces=[],
+        hypothesis_graph={
+            "nodes": [],
+            "edges": [],
+            "selected_hypothesis_ids": [],
+            "selected_room_assignments": {},
+        },
+    )
+
+    room = partitions["room_partitions"][0]
+    atom = room["partitions"][0]
+    assert room["partition_count"] == 1
+    assert atom["kind"] == "flat"
+    assert atom["flat_role"] == "implicit_room_shell_cap"
+    assert atom["flat_role_reason"] == "explicit_upper_occupancy_shell_cap"
+    assert atom["top_boundary_mode"] == "ceiling_below_occupied_volume"
+    assert atom["top_y_m"] == 2.8
+
+
+def test_room_ceiling_partitions_recover_invalid_room_polygon_from_geometry_collection_make_valid() -> None:
+    room_records = [
+        {
+            "room_index": 0,
+            "story": 0,
+            "graph_room_id": "room:r0",
+            "fp": [
+                [4.789, 0.0, 0.453],
+                [-5.341, 0.0, 7.447],
+                [-5.344, 0.0, 7.450],
+                [3.912, 0.0, -0.128],
+                [-2.215, 0.0, -4.004],
+                [4.789, 0.0, 0.453],
+            ],
+            "floorY": 0.0,
+            "wallTopY": 2.8,
+            "wallTopMin": 2.4,
+            "wallTopYs": [2.4, 2.8, 2.8],
+            "top_boundary_mode": "roof_candidate",
+        }
+    ]
+    partitions = derive_room_ceiling_partitions(
+        room_records=room_records,
+        oblique_roof_surfaces=[],
+        flat_roof_surfaces=[],
+        hypothesis_graph={
+            "nodes": [],
+            "edges": [],
+            "selected_hypothesis_ids": [],
+            "selected_room_assignments": {},
+        },
+    )
+
+    assert [room["room_index"] for room in partitions["room_partitions"]] == [0]
+    assert partitions["room_partitions"][0]["partition_count"] == 1
+
+
+def test_inject_simple_slant_partitions_adds_exact_oblique_partition_for_excluded_room() -> None:
+    partitions = {
+        "room_partitions": [],
+        "flat": [],
+        "oblique": [],
+        "metadata": {
+            "room_partition_count": 0,
+            "flat_partition_count": 0,
+            "oblique_partition_count": 0,
+            "mixed_room_count": 0,
+        },
+    }
+    room_records = [
+        {
+            "room_index": 6,
+            "story": 1,
+            "graph_room_id": "room:r6",
+            "top_boundary_mode": "roof_candidate",
+            "top_boundary_reason": "simple_slant",
+        }
+    ]
+    updated = inject_simple_slant_partitions(
+        partitions=partitions,
+        simple_slant_ceilings=[
+            {
+                "kind": "simple_slant",
+                "story": 1,
+                "room_index": 6,
+                "poly": [
+                    [0.0, 2.4, 0.0],
+                    [4.0, 2.4, 0.0],
+                    [4.0, 3.1, 4.0],
+                    [0.0, 3.1, 4.0],
+                ],
+            }
+        ],
+        room_records=room_records,
+    )
+
+    room_partition = updated["room_partitions"][0]
+    assert room_partition["room_index"] == 6
+    assert room_partition["partition_count"] == 1
+    assert room_partition["partitions"][0]["kind"] == "oblique"
+    assert updated["metadata"]["simple_slant_partition_count"] == 1
 
 
 def test_hypothesis_graph_uses_continuation_edges_to_link_candidates() -> None:

@@ -335,7 +335,17 @@ def _decompose_lines(geom: Any) -> list[LineString]:
 
 
 def _serialize_corners(corners: list[list[float]]) -> list[list[float]]:
-    return [[_round6(c[0]), _round6(c[1]), _round6(c[2])] for c in corners or [] if len(c) >= 3]
+    out: list[list[float]] = []
+    for corner in corners or []:
+        if len(corner) < 3:
+            continue
+        point = [_round6(corner[0]), _round6(corner[1]), _round6(corner[2])]
+        if out and point == out[-1]:
+            continue
+        out.append(point)
+    if len(out) >= 2 and out[0] == out[-1]:
+        out.pop()
+    return out
 
 
 def _building_story_unions(building: dict[str, Any] | None) -> dict[int, Polygon]:
@@ -711,14 +721,19 @@ def _renderable_surface_from_occupied_face(
     boundary_class = str(metadata.get("boundary_class") or "")
     category: str | None = None
     holes: list[list[list[float]]] = []
+    exact_source_kind = str(cell.get("exact_source_kind") or "")
     if boundary_class == "floor":
         category = "base_room_floor"
     elif boundary_class == "ceiling":
+        if exact_source_kind == "synthetic_top_boundary_atom":
+            return None
         category = "base_room_ceiling"
     elif boundary_class == "exterior_wall":
         category = "base_exterior_wall"
         holes = _collect_wall_cutout_holes(corners, openings)
     elif boundary_class == "interior_wall":
+        if str(face.get("source_kind") or "") == "splitter" or str(face.get("role") or "") == "splitter":
+            return None
         category = "base_interior_wall"
         holes = _collect_wall_cutout_holes(corners, openings)
     if category is None:
@@ -738,6 +753,41 @@ def _renderable_surface_from_occupied_face(
         "roof_hypothesis_id": cell.get("roof_hypothesis_id"),
         "top_boundary_atom_id": cell.get("top_boundary_atom_id"),
         "boundary_class": boundary_class,
+        "exact_source_kind": exact_source_kind or None,
+    }
+
+
+def _unresolved_region_from_synthetic_occupied_ceiling(
+    face: dict[str, Any],
+    cell: dict[str, Any],
+    *,
+    part_id: str,
+) -> dict[str, Any] | None:
+    metadata = face.get("metadata") or {}
+    if str(metadata.get("boundary_class") or "") != "ceiling":
+        return None
+    if str(cell.get("exact_source_kind") or "") != "synthetic_top_boundary_atom":
+        return None
+    corners = _face_corners(face)
+    if len(corners) < 3:
+        return None
+    polygon_xz = [[_round6(corner[0]), _round6(corner[2])] for corner in corners if len(corner) >= 3]
+    if len(polygon_xz) < 3:
+        return None
+    cell_id = str(cell.get("id") or "")
+    face_id = str(face.get("id") or "ceiling")
+    return {
+        "id": f"unresolved-occupied-fallback-top:{cell_id}:{face_id}",
+        "room_id": cell.get("room_id"),
+        "room_index": cell.get("room_index"),
+        "story": cell.get("story"),
+        "effective_part_ids": [part_id],
+        "polygon": corners,
+        "polygon_xz": polygon_xz,
+        "roof_evidence_score": None,
+        "fallback_source_kind": "occupied_room_synthetic_ceiling",
+        "top_boundary_atom_id": cell.get("top_boundary_atom_id"),
+        "exact_source_kind": cell.get("exact_source_kind"),
     }
 
 
@@ -747,12 +797,13 @@ def _renderable_surfaces_from_occupied_room_cells(
     building: dict[str, Any] | None,
     room_indices: set[int],
     part_id: str,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if occupied_room_cell_complex is None:
-        return []
+        return [], []
     fenestration_by_room = _fenestration_by_room(building)
     rooms = building.get("rooms") or [] if building is not None else []
     renderable: list[dict[str, Any]] = []
+    unresolved_regions: list[dict[str, Any]] = []
     include_all = part_id == FULL_BUILDING_PART_ID
     emitted_fenestration_rooms: set[int] = set()
     for cell in (occupied_room_cell_complex.get("cells") or []):
@@ -763,6 +814,10 @@ def _renderable_surfaces_from_occupied_room_cells(
             continue
         for face in (cell.get("faces") or []):
             if not isinstance(face, dict):
+                continue
+            unresolved = _unresolved_region_from_synthetic_occupied_ceiling(face, cell, part_id=part_id)
+            if unresolved is not None:
+                unresolved_regions.append(unresolved)
                 continue
             surface = _renderable_surface_from_occupied_face(
                 face,
@@ -789,7 +844,7 @@ def _renderable_surfaces_from_occupied_room_cells(
             )
         )
         emitted_fenestration_rooms.add(room_index)
-    return renderable
+    return renderable, unresolved_regions
 
 
 def _renderable_base_room_surfaces(
@@ -869,6 +924,8 @@ def _renderable_category_for_atom(atom: dict[str, Any]) -> str | None:
     role = str(atom.get("role") or "")
     if role == "sloped_ceiling":
         return "room_ceiling_sloped"
+    if role == "flat_ceiling":
+        return "room_ceiling_flat"
     if role in {"attic_floor", "attic_floor_inferred"}:
         return "attic_floor"
     if role in {"flat_transition_cap", "flat_transition_cap_inferred"}:
@@ -895,6 +952,28 @@ def _renderable_surface_from_atom(atom: dict[str, Any]) -> dict[str, Any] | None
         "roof_hypothesis_id": atom.get("roof_hypothesis_id"),
         "top_y_m": atom.get("top_y_m"),
     }
+
+
+def _part_semantic_atoms(
+    *,
+    summary: dict[str, Any],
+    part_id: str,
+    room_indices: set[int],
+    include_all_rooms: bool,
+) -> list[dict[str, Any]]:
+    atoms: list[dict[str, Any]] = []
+    for atom in (summary.get("semantic_atoms") or []):
+        if not isinstance(atom, dict):
+            continue
+        atom_part_id = str(atom.get("effective_part_id") or UNASSIGNED_PART_ID)
+        room_index = atom.get("room_index")
+        if not include_all_rooms:
+            if atom_part_id != part_id and (not isinstance(room_index, int) or room_index not in room_indices):
+                continue
+            if part_id == UNASSIGNED_PART_ID and atom_part_id not in {UNASSIGNED_PART_ID, part_id}:
+                continue
+        atoms.append(atom)
+    return atoms
 
 
 def _renderable_surface_from_unresolved_region(region: dict[str, Any]) -> dict[str, Any] | None:
@@ -1022,22 +1101,238 @@ def _is_exact_flat_roof_surface(
 ) -> bool:
     if str(surface.get("surface_kind") or surface.get("kind") or "") != "flat":
         return False
+    if not isinstance(surface.get("room_index"), int):
+        return False
+    if str(surface.get("flat_role") or "") == "ambiguous_flat_over_sloped_part":
+        return False
     room_summary = _room_summary_for_room_index(summary, surface.get("room_index"))
     if not room_summary:
         return True
-    if bool(room_summary.get("has_resolved_roof_relation")):
+    if bool(room_summary.get("has_attic_relation") or room_summary.get("has_upper_void_relation")):
+        return True
+    roles = {str(value) for value in (room_summary.get("roles") or []) if value}
+    has_sloped_semantics = bool(
+        room_summary.get("has_oblique_atom")
+        or room_summary.get("covered_by_sloped_roof")
+        or room_summary.get("partially_covered_by_sloped_roof")
+        or room_summary.get("strong_perimeter_sloped")
+        or room_summary.get("strong_knee_wall_signal")
+        or "sloped_ceiling" in roles
+    )
+    if has_sloped_semantics:
+        return False
+    if bool(room_summary.get("has_resolved_roof_relation")) and bool(
+        room_summary.get("has_attic_relation") or room_summary.get("has_upper_void_relation")
+    ):
         return True
     return not any(
         [
-            bool(room_summary.get("partially_covered_by_sloped_roof")),
-            bool(room_summary.get("strong_perimeter_sloped")),
-            bool(room_summary.get("strong_knee_wall_signal")),
             bool(room_summary.get("has_candidate_attic_relation")),
             bool(room_summary.get("has_candidate_upper_void_relation")),
-            bool(room_summary.get("has_oblique_atom")),
             int(room_summary.get("roof_evidence_score", 0) or 0) >= 4,
         ]
     )
+
+
+def _drop_room_flat_fallback_over_sloped_semantics(
+    *,
+    surface: dict[str, Any],
+    summary: dict[str, Any],
+) -> bool:
+    if str(surface.get("surface_kind") or surface.get("kind") or "") != "flat":
+        return False
+    room_index = surface.get("room_index")
+    if not isinstance(room_index, int):
+        return False
+    room_summary = _room_summary_for_room_index(summary, room_index)
+    if not room_summary:
+        return False
+    if bool(room_summary.get("has_attic_relation") or room_summary.get("has_upper_void_relation")):
+        return False
+    roles = {str(value) for value in (room_summary.get("roles") or []) if value}
+    if "sloped_ceiling" not in roles and not bool(room_summary.get("has_oblique_atom")):
+        return False
+    return True
+
+
+def _skip_roomless_ambiguous_flat_surface(surface: dict[str, Any]) -> bool:
+    if str(surface.get("surface_kind") or surface.get("kind") or "") != "flat":
+        return False
+    if isinstance(surface.get("room_index"), int):
+        return False
+    return str(surface.get("flat_role") or "") == "ambiguous_flat_over_sloped_part"
+
+
+def _drop_roomless_flat_fallback_without_atoms(
+    *,
+    surface: dict[str, Any],
+    roof: dict[str, Any] | None,
+    summary: dict[str, Any],
+) -> bool:
+    if str(surface.get("surface_kind") or surface.get("kind") or "") != "flat":
+        return False
+    if isinstance(surface.get("room_index"), int):
+        return False
+    roof_hypothesis_id = str(surface.get("roof_hypothesis_id") or "")
+    if not roof_hypothesis_id:
+        return False
+
+    semantic_atoms = [
+        atom
+        for atom in (summary.get("semantic_atoms") or [])
+        if isinstance(atom, dict)
+        and str(atom.get("kind") or "") == "flat"
+        and str(atom.get("roof_hypothesis_id") or "") == roof_hypothesis_id
+    ]
+    if semantic_atoms:
+        return False
+
+    hypothesis_graph = (roof or {}).get("roof_hypothesis_graph") or {}
+    selected_hypothesis_ids = {
+        str(value)
+        for value in (
+            hypothesis_graph.get("selected_hypothesis_ids")
+            or []
+        )
+        if value
+    }
+    if roof_hypothesis_id not in selected_hypothesis_ids:
+        return True
+
+    selected_cover_room_ids = [
+        str(edge.get("to"))
+        for edge in (hypothesis_graph.get("edges") or [])
+        if isinstance(edge, dict)
+        and str(edge.get("type") or "") == "COVERS_ROOM"
+        and str(edge.get("from") or "") == roof_hypothesis_id
+        and bool(edge.get("selected"))
+        and isinstance(edge.get("to"), str)
+        and str(edge.get("to")).startswith("room:")
+    ]
+    if not selected_cover_room_ids:
+        return True
+
+    room_summaries = summary.get("room_summaries") or {}
+    for room_id in selected_cover_room_ids:
+        room_summary = room_summaries.get(room_id) or {}
+        if not bool(room_summary.get("has_resolved_roof_relation")):
+            # No semantic atom and no resolved semantic room support. Reject the
+            # legacy roomless flat fallback instead of inventing a payload-level
+            # unresolved patch that the summary layer does not recognize.
+            return True
+    return True
+
+
+def _roof_atom_patch_payload(
+    *,
+    summary: dict[str, Any],
+    part_id: str,
+    room_indices: set[int],
+    roof_hypothesis_id: str,
+    include_all_rooms: bool,
+    surface_kind: str = "oblique",
+) -> list[dict[str, Any]]:
+    if not roof_hypothesis_id:
+        return []
+    renderable: list[dict[str, Any]] = []
+    emitted_ids: set[str] = set()
+    for atom in (summary.get("semantic_atoms") or []):
+        if not isinstance(atom, dict):
+            continue
+        if str(atom.get("kind") or "") != str(surface_kind):
+            continue
+        if str(atom.get("roof_hypothesis_id") or "") != roof_hypothesis_id:
+            continue
+        if surface_kind == "flat":
+            if str(atom.get("flat_role") or "") == "ambiguous_flat_over_sloped_part":
+                continue
+            # Flat roof atom patches should only represent true flat roof exterior
+            # surfaces, not interior top-boundary semantics like attic floors or
+            # flat transition caps.
+            if str(atom.get("role") or "") != "flat_ceiling":
+                continue
+            if str(atom.get("flat_role") or "") != "roof_flat":
+                continue
+        room_index = atom.get("room_index")
+        atom_part_id = str(atom.get("effective_part_id") or UNASSIGNED_PART_ID)
+        if not include_all_rooms:
+            if atom_part_id != part_id and (not isinstance(room_index, int) or room_index not in room_indices):
+                continue
+        corners = _serialize_corners(atom.get("poly") or [])
+        if len(corners) < 3:
+            continue
+        atom_id = str(atom.get("id") or "")
+        renderable_id = f"renderable:exterior_roof:roof-atom-patch:{surface_kind}:{atom_id}"
+        if renderable_id in emitted_ids:
+            continue
+        emitted_ids.add(renderable_id)
+        renderable.append(
+            {
+                "id": renderable_id,
+                "category": "exterior_roof",
+                "source_kind": "roof_atom_patch",
+                "source_id": atom_id,
+                "corners": corners,
+                "part_id": part_id if include_all_rooms else atom_part_id,
+                "room_id": atom.get("room_id"),
+                "room_index": room_index,
+                "story": atom.get("story"),
+                "roof_hypothesis_id": roof_hypothesis_id,
+                "surface_kind": surface_kind,
+            }
+        )
+    return renderable
+
+
+def _room_flat_roof_atom_patch_payload(
+    *,
+    summary: dict[str, Any],
+    part_id: str,
+    room_indices: set[int],
+    room_index: int,
+    include_all_rooms: bool,
+    emitted_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    renderable: list[dict[str, Any]] = []
+    local_emitted_ids = emitted_ids if emitted_ids is not None else set()
+    for atom in (summary.get("semantic_atoms") or []):
+        if not isinstance(atom, dict):
+            continue
+        if str(atom.get("kind") or "") != "flat":
+            continue
+        if str(atom.get("role") or "") != "flat_ceiling":
+            continue
+        if str(atom.get("flat_role") or "") != "roof_flat":
+            continue
+        if atom.get("room_index") != room_index:
+            continue
+        atom_part_id = str(atom.get("effective_part_id") or UNASSIGNED_PART_ID)
+        if not include_all_rooms and atom_part_id != part_id and room_index not in room_indices:
+            continue
+        corners = _serialize_corners(atom.get("poly") or [])
+        if len(corners) < 3:
+            continue
+        atom_id = str(atom.get("id") or "")
+        renderable_id = f"renderable:exterior_roof:roof-atom-patch:flat:{atom_id}"
+        if renderable_id in local_emitted_ids:
+            continue
+        local_emitted_ids.add(renderable_id)
+        renderable.append(
+            {
+                "id": renderable_id,
+                "category": "exterior_roof",
+                "source_kind": "roof_atom_patch",
+                "source_id": atom_id,
+                "corners": corners,
+                "part_id": part_id if include_all_rooms else atom_part_id,
+                "room_id": atom.get("room_id"),
+                "room_index": room_index,
+                "story": atom.get("story"),
+                "roof_hypothesis_id": atom.get("roof_hypothesis_id"),
+                "surface_kind": "flat",
+            }
+        )
+    return renderable
 
 
 def _roof_surface_fallback_payload(
@@ -1047,6 +1342,7 @@ def _roof_surface_fallback_payload(
     part_id: str,
     room_indices: set[int],
     exact_roof_room_indices: set[int],
+    exact_roof_hypothesis_ids: set[str],
     include_all_rooms: bool,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int, int]:
     if roof is None:
@@ -1056,77 +1352,101 @@ def _roof_surface_fallback_payload(
     unresolved_regions: list[dict[str, Any]] = []
     exact_flat_surface_count = 0
     coverage_patch_surface_count = 0
-    patch_ids_by_hypothesis: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for patch in (summary.get("oblique_coverage_patches") or []):
-        if not isinstance(patch, dict):
-            continue
-        hypothesis_id = str(patch.get("roof_hypothesis_id") or "")
-        if not hypothesis_id:
-            continue
-        patch_ids_by_hypothesis[hypothesis_id].append(patch)
-    emitted_patch_ids: set[str] = set()
+    emitted_room_flat_atom_ids: set[str] = set()
+    emitted_renderable_ids: set[str] = set()
+
+    def append_unique_surfaces(surfaces: list[dict[str, Any]]) -> int:
+        appended = 0
+        for item in surfaces:
+            surface_id = str(item.get("id") or "")
+            if surface_id and surface_id in emitted_renderable_ids:
+                continue
+            if surface_id:
+                emitted_renderable_ids.add(surface_id)
+            renderable.append(item)
+            appended += 1
+        return appended
+
     for surface_kind in ("oblique", "flat"):
         for index, surface in enumerate(roof_surfaces.get(surface_kind) or []):
             if not isinstance(surface, dict):
                 continue
+            if _skip_roomless_ambiguous_flat_surface(surface):
+                continue
             room_index = surface.get("room_index")
-            matching_patches = []
-            if surface_kind == "oblique":
-                hypothesis_id = str(surface.get("roof_hypothesis_id") or "")
-                for patch in patch_ids_by_hypothesis.get(hypothesis_id, []):
-                    effective_part_ids = {
-                        str(value)
-                        for value in (patch.get("effective_part_ids") or [])
-                        if value
-                    }
-                    patch_room_indices = {
-                        int(value)
-                        for value in (patch.get("room_indices") or [])
-                        if isinstance(value, int)
-                    }
-                    if include_all_rooms:
-                        matching_patches.append(patch)
-                        continue
-                    if part_id in effective_part_ids:
-                        matching_patches.append(patch)
-                        continue
-                    if patch_room_indices and patch_room_indices.intersection(room_indices):
-                        matching_patches.append(patch)
+            roof_hypothesis_id = str(surface.get("roof_hypothesis_id") or "")
             if isinstance(room_index, int):
                 if not include_all_rooms and room_index not in room_indices:
                     continue
                 if room_index in exact_roof_room_indices:
                     continue
             elif not include_all_rooms:
-                if matching_patches:
-                    for patch in matching_patches:
-                        patch_id = str(patch.get("id") or "")
-                        if not patch_id or patch_id in emitted_patch_ids:
-                            continue
-                        renderable_patch = _renderable_surface_from_coverage_patch(
-                            patch,
-                            part_id=part_id,
-                        )
-                        if renderable_patch is None:
-                            continue
-                        renderable.append(renderable_patch)
-                        emitted_patch_ids.add(patch_id)
-                        coverage_patch_surface_count += 1
                 continue
-            if matching_patches and not isinstance(room_index, int):
-                for patch in matching_patches:
-                    patch_id = str(patch.get("id") or "")
-                    if not patch_id or patch_id in emitted_patch_ids:
-                        continue
-                    renderable_patch = _renderable_surface_from_coverage_patch(
-                        patch,
-                        part_id=part_id,
-                    )
-                    if renderable_patch is None:
-                        continue
-                    renderable.append(renderable_patch)
-                    emitted_patch_ids.add(patch_id)
-                    coverage_patch_surface_count += 1
+            elif roof_hypothesis_id and roof_hypothesis_id in exact_roof_hypothesis_ids:
+                continue
+            elif surface_kind == "oblique":
+                atom_patches = _roof_atom_patch_payload(
+                    summary=summary,
+                    part_id=part_id,
+                    room_indices=room_indices,
+                    roof_hypothesis_id=roof_hypothesis_id,
+                    include_all_rooms=include_all_rooms,
+                    surface_kind="oblique",
+                )
+                if atom_patches:
+                    append_unique_surfaces(atom_patches)
+                    continue
+                surface_id = str(
+                    surface.get("boundary_face_id")
+                    or surface.get("roof_hypothesis_id")
+                    or f"{surface_kind}:{index}"
+                )
+                unresolved = _fallback_unresolved_region_from_roof_surface(
+                    surface,
+                    part_id=part_id,
+                    surface_id=surface_id,
+                )
+                if unresolved is not None:
+                    unresolved_regions.append(unresolved)
+                continue
+            if not isinstance(room_index, int):
+                atom_patches = _roof_atom_patch_payload(
+                    summary=summary,
+                    part_id=part_id,
+                    room_indices=room_indices,
+                    roof_hypothesis_id=roof_hypothesis_id,
+                    include_all_rooms=include_all_rooms,
+                    surface_kind="flat",
+                )
+                if atom_patches:
+                    renderable.extend(atom_patches)
+                    exact_flat_surface_count += len(atom_patches)
+                    continue
+                if _drop_roomless_flat_fallback_without_atoms(surface=surface, roof=roof, summary=summary):
+                    continue
+                surface_id = str(
+                    surface.get("boundary_face_id")
+                    or surface.get("roof_hypothesis_id")
+                    or f"{surface_kind}:{index}"
+                )
+                unresolved = _fallback_unresolved_region_from_roof_surface(
+                    surface,
+                    part_id=part_id,
+                    surface_id=surface_id,
+                )
+                if unresolved is not None:
+                    unresolved_regions.append(unresolved)
+                continue
+            room_atom_patches = _room_flat_roof_atom_patch_payload(
+                summary=summary,
+                part_id=part_id,
+                room_indices=room_indices,
+                room_index=room_index,
+                include_all_rooms=include_all_rooms,
+                emitted_ids=emitted_room_flat_atom_ids,
+            )
+            if room_atom_patches:
+                exact_flat_surface_count += append_unique_surfaces(room_atom_patches)
                 continue
             surface_id = str(
                 surface.get("boundary_face_id")
@@ -1135,6 +1455,8 @@ def _roof_surface_fallback_payload(
             )
             source_kind = "roof_surface_fallback"
             emit_unresolved = True
+            if _drop_room_flat_fallback_over_sloped_semantics(surface=surface, summary=summary):
+                continue
             if _is_exact_flat_roof_surface(surface=surface, summary=summary):
                 source_kind = "roof_surface_exact_flat"
                 emit_unresolved = False
@@ -1147,7 +1469,7 @@ def _roof_surface_fallback_payload(
             )
             if fallback_surface is None:
                 continue
-            renderable.append(fallback_surface)
+            append_unique_surfaces([fallback_surface])
             if emit_unresolved:
                 unresolved = _fallback_unresolved_region_from_roof_surface(
                     surface,
@@ -1229,6 +1551,19 @@ def _surface_category_counts(surfaces: list[dict[str, Any]]) -> dict[str, int]:
         if category:
             counts[category] += 1
     return dict(sorted(counts.items()))
+
+
+def _dedupe_renderable_surfaces(surfaces: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    emitted_ids: set[str] = set()
+    for surface in surfaces:
+        surface_id = str(surface.get("id") or "")
+        if surface_id and surface_id in emitted_ids:
+            continue
+        if surface_id:
+            emitted_ids.add(surface_id)
+        deduped.append(surface)
+    return deduped
 
 
 def _topology_cell_polygon(cell: dict[str, Any]) -> Polygon | None:
@@ -1372,6 +1707,7 @@ def _build_ontology_summary(
     roof_evidence_graph = roof.get("roof_evidence_graph") or {}
     roof_cell_complex = roof.get("roof_cell_complex") or {}
     roof_surfaces = roof.get("roof_surfaces") or {}
+    roof_continuation_diagnostics = roof.get("roof_continuation_diagnostics") or {}
     room_partitions = ((roof.get("ceiling_partitions") or {}).get("room_partitions") or [])
     dormers = roof.get("dormers") or []
 
@@ -1747,6 +2083,30 @@ def _build_ontology_summary(
             ] or ([UNASSIGNED_PART_ID] if room_id in unassigned_room_ids else [])
         dormer["effective_part_ids"] = effective_part_ids
 
+    continuation_regions: list[dict[str, Any]] = []
+    for region in (roof_continuation_diagnostics.get("continuation_regions") or []):
+        if not isinstance(region, dict):
+            continue
+        room_id = str(region.get("room_id") or "")
+        room_index = region.get("room_index")
+        effective_part_ids = [
+            str(part_id)
+            for part_id in (room_membership.get(room_id) or [])
+        ]
+        if not effective_part_ids and isinstance(room_index, int):
+            effective_part_ids = [
+                str(part_id)
+                for part_id in (room_membership.get(_room_key(room_index)) or [])
+            ]
+        if not effective_part_ids:
+            effective_part_ids = [UNASSIGNED_PART_ID]
+        continuation_regions.append(
+            {
+                **region,
+                "effective_part_ids": effective_part_ids,
+            }
+        )
+
     renderable_surfaces = [
         surface
         for surface in (
@@ -1771,6 +2131,7 @@ def _build_ontology_summary(
         "building_parts": building_parts,
         "coverage_subparts": coverage_subparts,
         "oblique_coverage_patches": oblique_coverage_patches,
+        "roof_continuation_diagnostics": continuation_regions,
         "semantic_atoms": semantic_atoms,
         "unresolved_regions": unresolved_regions,
         "renderable_surfaces": renderable_surfaces,
@@ -1785,6 +2146,7 @@ def _build_ontology_summary(
             "semantic_atom_count": len(semantic_atoms),
             "coverage_subpart_count": len(coverage_subparts),
             "oblique_coverage_patch_count": len(oblique_coverage_patches),
+            "roof_continuation_region_count": len(continuation_regions),
             "unresolved_region_count": len(unresolved_regions),
             "renderable_surface_count": len(renderable_surfaces),
             "renderable_surface_counts": renderable_surface_counts,
@@ -1884,6 +2246,7 @@ def _build_ontology_part_payloads(
         filtered_roof_cells: list[dict[str, Any]] = []
         renderable_surfaces: list[dict[str, Any]] = []
         exact_roof_room_indices: set[int] = set()
+        exact_roof_hypothesis_ids: set[str] = set()
         topology_cells = [
             cell
             for cell in topology_room_cells
@@ -1912,6 +2275,9 @@ def _build_ontology_part_payloads(
                     room_index = cell.get("room_index")
                     if isinstance(room_index, int):
                         exact_roof_room_indices.add(room_index)
+                    roof_hypothesis_id = str(cell.get("roof_hypothesis_id") or "")
+                    if roof_hypothesis_id:
+                        exact_roof_hypothesis_ids.add(roof_hypothesis_id)
             if not viewer_faces:
                 continue
             filtered = dict(cell)
@@ -1944,7 +2310,7 @@ def _build_ontology_part_payloads(
             )
             if surface is not None
         )
-        occupied_renderable_surfaces = _renderable_surfaces_from_occupied_room_cells(
+        occupied_renderable_surfaces, occupied_unresolved_regions = _renderable_surfaces_from_occupied_room_cells(
             occupied_room_cell_complex=occupied_room_cell_complex,
             building=building,
             room_indices=room_indices,
@@ -1962,6 +2328,20 @@ def _build_ontology_part_payloads(
                     part_id=part_id,
                 )
             )
+        unresolved_regions.extend(occupied_unresolved_regions)
+        renderable_surfaces.extend(
+            surface
+            for surface in (
+                _renderable_surface_from_atom(atom)
+                for atom in _part_semantic_atoms(
+                    summary=summary,
+                    part_id=part_id,
+                    room_indices=room_indices,
+                    include_all_rooms=include_all_rooms,
+                )
+            )
+            if surface is not None
+        )
         (
             fallback_roof_surfaces,
             fallback_unresolved_regions,
@@ -1973,6 +2353,7 @@ def _build_ontology_part_payloads(
             part_id=part_id,
             room_indices=room_indices,
             exact_roof_room_indices=exact_roof_room_indices,
+            exact_roof_hypothesis_ids=exact_roof_hypothesis_ids,
             include_all_rooms=include_all_rooms,
         )
         renderable_surfaces.extend(fallback_roof_surfaces)
@@ -2007,6 +2388,7 @@ def _build_ontology_part_payloads(
             if surface is not None
         ]
         renderable_surfaces.extend(unresolved_renderable_surfaces)
+        renderable_surfaces = _dedupe_renderable_surfaces(renderable_surfaces)
         renderable_surface_counts = _surface_category_counts(renderable_surfaces)
         dormer_subset = _filter_part_dormers(dormers, room_indices)
         part_details[part_id] = {

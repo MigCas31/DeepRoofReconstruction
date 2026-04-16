@@ -15,7 +15,11 @@ import {
   collectWallCutoutHoles, orientedStructureCorners,
 } from './viewer-modules/geometry.js';
 import { renderRoofFromPythonResult } from './viewer-modules/roof-python.js';
-import { renderOntologySemantics, renderOntologyExact } from './viewer-modules/ontology-cells.js';
+import {
+  renderOntologySemantics,
+  renderOntologyContinuationDiagnostics,
+  renderOntologyExact,
+} from './viewer-modules/ontology-cells.js';
 import { renderOntologyEnhancedFullModel } from './viewer-modules/full-model-ontology.js';
 import { createOrthoMapController } from './viewer-modules/map-ortho.js';
 import { bindUIEventHandlers } from './viewer-modules/ui-bindings.js';
@@ -118,6 +122,7 @@ function getVisiblePickRoots() {
     groups.fullModelHeuristicRoof,
     groups.fullModelOntology,
     groups.ontologySemantics,
+    groups.ontologyContinuation,
     groups.ontologyCells,
   ].filter(g => g.visible);
 }
@@ -339,6 +344,7 @@ let groups = {
   fullModelHeuristicRoof: new THREE.Group(),
   fullModelOntology: new THREE.Group(),
   ontologySemantics: new THREE.Group(),
+  ontologyContinuation: new THREE.Group(),
   ontologyCells: new THREE.Group(),
   fullModel: new THREE.Group(),
   selection: new THREE.Group(),
@@ -360,6 +366,7 @@ scene.add(groups.roofClusters);
 scene.add(groups.fullModelHeuristicRoof);
 scene.add(groups.fullModelOntology);
 scene.add(groups.ontologySemantics);
+scene.add(groups.ontologyContinuation);
 scene.add(groups.ontologyCells);
 scene.add(groups.fullModel);
 scene.add(groups.selection);
@@ -375,6 +382,7 @@ groups.thermalCeilings.visible = false;
 groups.fullModelHeuristicRoof.visible = false;
 groups.fullModelOntology.visible = false;
 groups.ontologySemantics.visible = false;
+groups.ontologyContinuation.visible = false;
 groups.ontologyCells.visible = false;
 groups.selection.visible = true;
 
@@ -409,7 +417,7 @@ function setLayerVisibility(layer, visible, syncControls = true) {
     const ctl = id ? document.getElementById(id) : null;
     if (ctl) ctl.checked = visible;
   }
-  if (layer === 'ontologySemantics' || layer === 'ontologyCells') {
+  if (layer === 'ontologySemantics' || layer === 'ontologyContinuation' || layer === 'ontologyCells') {
     updateOntologyStatusInfo();
   }
 }
@@ -440,19 +448,19 @@ function renderLegend() {
     html += `<span style="background:#f66;opacity:0.3"></span>Clipped wall `;
   }
   if (document.getElementById('show-full-model').checked) {
-    html += `<span style="background:#d2d8e0"></span>Full model `;
-    html += `<span style="background:#8eb8d6"></span>Ontology roof `;
-    html += `<span style="background:#e5ded4"></span>Exterior wall `;
-    html += `<span style="background:#ded9cf"></span>Room wall `;
-    html += `<span style="background:#c8c2b7"></span>Room floor `;
-    html += `<span style="background:#d5cbc0"></span>Ontology ceiling `;
+    html += `<span style="background:#d2d8e0;opacity:0.45"></span>Heuristic shell reference `;
+    html += `<span style="background:#8eb8d6"></span>Ontology roof replacement `;
+    html += `<span style="background:#e5ded4"></span>Ontology wall replacement `;
+    html += `<span style="background:#c8c2b7"></span>Ontology floor replacement `;
+    html += `<span style="background:#d5cbc0"></span>Exact semantic ceiling `;
+    html += `<span style="background:#f59e0b"></span>Fallback ceiling diagnostic `;
     html += `<span style="background:#e3bf96"></span>Knee wall `;
     html += `<span style="background:#f97316"></span>Unresolved coverage `;
     if (document.getElementById('show-full-model-diff')?.checked) {
-      html += `<span style="background:#22d3ee"></span>Diff roof `;
-      html += `<span style="background:#a3e635"></span>Diff exterior wall `;
-      html += `<span style="background:#fb7185"></span>Diff ceiling `;
-      html += `<span style="background:#ef4444"></span>Diff knee wall `;
+      html += `<span style="background:#22d3ee"></span>Ontology diff roof `;
+      html += `<span style="background:#a3e635"></span>Ontology diff exterior wall `;
+      html += `<span style="background:#fb7185"></span>Ontology diff ceiling `;
+      html += `<span style="background:#ef4444"></span>Ontology diff knee wall `;
     }
   }
   if (document.getElementById('show-thermal-ceilings')?.checked) {
@@ -492,6 +500,11 @@ function renderLegend() {
     html += `<span style="background:#dc2626"></span>Unresolved `;
     html += `<span style="background:#eab308"></span>Dormer `;
   }
+  if (document.getElementById('show-ontology-continuation')?.checked) {
+    html += '<br>';
+    html += `<span style="background:#22d3ee"></span>Arrangement-face continuation `;
+    html += `<span style="background:#38bdf8"></span>Continuation candidate `;
+  }
   if (document.getElementById('show-ontology-cells')?.checked) {
     html += '<br>';
     html += `<span style="background:#c2410c"></span>Attic roof `;
@@ -501,6 +514,45 @@ function renderLegend() {
     html += `<span style="background:#ff006e"></span>Knee walls `;
   }
   legendBox.innerHTML = html;
+}
+
+function setGhostStateOnMaterial(material, ghosted, opacityScale, minOpacity = 0.04) {
+  if (!material || material.isLineBasicMaterial || material.isLineDashedMaterial) return;
+  material.userData = material.userData || {};
+  if (material.userData._ghostBaseOpacity === undefined) {
+    material.userData._ghostBaseOpacity = Number.isFinite(material.opacity) ? material.opacity : 1.0;
+    material.userData._ghostBaseTransparent = !!material.transparent;
+    material.userData._ghostBaseDepthWrite = material.depthWrite !== false;
+  }
+  if (ghosted) {
+    const baseOpacity = Number(material.userData._ghostBaseOpacity ?? 1.0);
+    material.opacity = Math.max(minOpacity, baseOpacity * opacityScale);
+    material.transparent = true;
+    material.depthWrite = false;
+  } else {
+    material.opacity = Number(material.userData._ghostBaseOpacity ?? 1.0);
+    material.transparent = !!material.userData._ghostBaseTransparent;
+    material.depthWrite = material.userData._ghostBaseDepthWrite !== false;
+  }
+  material.needsUpdate = true;
+}
+
+function setGroupGhostState(group, ghosted, opacityScale, minOpacity = 0.04) {
+  if (!group) return;
+  group.traverse((obj) => {
+    if (!obj?.isMesh || !obj.material) return;
+    const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+    materials.forEach((material) => setGhostStateOnMaterial(material, ghosted, opacityScale, minOpacity));
+  });
+}
+
+function updateFullModelReferencePresentation(bldg) {
+  if (!bldg?.uuid) return;
+  const showFullModel = !!document.getElementById('show-full-model')?.checked;
+  const enhancement = fullModelEnhancementByUuid[bldg.uuid] || null;
+  const ghostBaseline = showFullModel && !!enhancement?.hasEnhancement;
+  setGroupGhostState(groups.fullModel, ghostBaseline, fullModelDiffModeEnabled ? 0.14 : 0.22, 0.035);
+  setGroupGhostState(groups.fullModelHeuristicRoof, ghostBaseline, fullModelDiffModeEnabled ? 0.18 : 0.24, 0.05);
 }
 
 function getOntologyLoadState(uuid) {
@@ -544,6 +596,7 @@ function setSelectedOntologyPart(uuid, partId, { announce = false } = {}) {
   const bldg = DATA[currentBuilding];
   if (bldg?.uuid === uuid) {
     renderOntologySemanticsForBuilding(bldg);
+    renderOntologyContinuationForBuilding(bldg);
     renderOntologyExactForBuilding(bldg);
     updateOntologyStatusInfo();
     if (announce) setMapStatus(`Selected ontology part ${partId}`);
@@ -561,9 +614,10 @@ function updateOntologyStatusInfo() {
   const bldg = DATA[currentBuilding];
   if (!bldg) return;
   const showSemantics = !!document.getElementById('show-ontology-semantics')?.checked;
+  const showContinuation = !!document.getElementById('show-ontology-continuation')?.checked;
   const showCells = !!document.getElementById('show-ontology-cells')?.checked;
   const showFullModel = !!document.getElementById('show-full-model')?.checked;
-  if (!showSemantics && !showCells && !showFullModel) {
+  if (!showSemantics && !showContinuation && !showCells && !showFullModel) {
     document.getElementById('building-info').innerHTML = buildingInfoBaseHtml;
     return;
   }
@@ -573,18 +627,21 @@ function updateOntologyStatusInfo() {
   const selectedPartId = getSelectedOntologyPartId(bldg.uuid) || getDefaultOntologyPartId(summary);
   const enhancement = fullModelEnhancementByUuid[bldg.uuid] || null;
   const summaryLine = summary
-    ? `Ontology summary: ${summary.metadata?.oblique_coverage_patch_count || 0} slope patches, ${summary.metadata?.coverage_subpart_count || 0} subparts, ${summary.metadata?.unresolved_region_count || 0} unresolved`
+    ? `Ontology summary: ${summary.metadata?.oblique_coverage_patch_count || 0} slope patches, ${summary.metadata?.roof_continuation_region_count || 0} continuation regions, ${summary.metadata?.coverage_subpart_count || 0} subparts, ${summary.metadata?.unresolved_region_count || 0} unresolved`
     : 'Ontology summary: not loaded';
+  const continuationLine = showContinuation
+    ? `Continuation diagnostics: ${summary?.metadata?.roof_continuation_region_count || 0} arrangement-face regions`
+    : 'Continuation diagnostics: layer hidden';
   const exactLine = showCells
     ? `Exact part: ${selectedPartId || 'none'}${selectedPartId && loadState.loadedPartIds.has(selectedPartId) ? ' loaded' : ''}`
     : 'Exact part payloads: layer hidden';
   const fullModelLine = showFullModel
     ? (enhancement
-      ? `Full model ontology: ${enhancement.hasEnhancement ? 'active' : 'no exact replacement'}${enhancement.hasEnhancement ? ` (${enhancement.roofFaceCount} roof faces, ${enhancement.baseWallCount} base walls, ${enhancement.baseFloorCount} base floors, ${enhancement.fenestrationCount} fenestration surfaces, ${enhancement.exteriorWallCount} scaffold exterior walls, ${enhancement.occupiedSurfaceCount} scaffold occupied-room surfaces, ${enhancement.ceilingSurfaceCount} semantic ceilings, ${enhancement.kneeWallCount} knee walls${enhancement.unresolvedCount ? `, ${enhancement.unresolvedCount} unresolved` : ''}${fullModelDiffModeEnabled ? ', diff mode' : ''})` : ''}`
+      ? `Full model ontology: ${enhancement.hasEnhancement ? 'active' : 'no exact replacement'}${enhancement.hasEnhancement ? ` (${enhancement.roofFaceCount} roof faces, ${enhancement.baseWallCount} base walls, ${enhancement.baseFloorCount} base floors, ${enhancement.fenestrationCount} fenestration surfaces, ${enhancement.exteriorWallCount} scaffold exterior walls, ${enhancement.occupiedSurfaceCount} scaffold occupied-room surfaces, ${enhancement.ceilingSurfaceCount} exact semantic ceilings${enhancement.fallbackCeilingCount ? `, ${enhancement.fallbackCeilingCount} fallback ceilings` : ''}, ${enhancement.kneeWallCount} knee walls${enhancement.unresolvedCount ? `, ${enhancement.unresolvedCount} unresolved` : ''}${fullModelDiffModeEnabled ? ', diff mode' : ', heuristic shell ghosted'})` : ''}`
       : `Full model ontology: loading ${partCount > 0 ? `${loadState.loadedPartIds.size}/${partCount} parts` : 'summary'}`)
     : 'Full model ontology: layer hidden';
   document.getElementById('building-info').innerHTML =
-    `${buildingInfoBaseHtml}<br><span style="color:#67e8f9">${summaryLine}</span><br><span style="color:#93c5fd">${exactLine}</span><br><span style="color:#c4b5fd">${fullModelLine}</span>`;
+    `${buildingInfoBaseHtml}<br><span style="color:#67e8f9">${summaryLine}</span><br><span style="color:#22d3ee">${continuationLine}</span><br><span style="color:#93c5fd">${exactLine}</span><br><span style="color:#c4b5fd">${fullModelLine}</span>`;
 }
 
 function renderOntologySemanticsForBuilding(bldg) {
@@ -595,6 +652,25 @@ function renderOntologySemanticsForBuilding(bldg) {
     return;
   }
   renderOntologySemantics({
+    ontologySummary: summary,
+    selectedPartId: getSelectedOntologyPartId(bldg.uuid) || getDefaultOntologyPartId(summary),
+    groups,
+    createPolygonMesh,
+    createEdgeLoop,
+    attachLocator,
+    buildingUuid: bldg.uuid,
+  });
+  updateOntologyStatusInfo();
+}
+
+function renderOntologyContinuationForBuilding(bldg) {
+  disposeGroup(groups.ontologyContinuation);
+  const summary = ontologySummaryByUuid[bldg.uuid] || null;
+  if (!summary) {
+    updateOntologyStatusInfo();
+    return;
+  }
+  renderOntologyContinuationDiagnostics({
     ontologySummary: summary,
     selectedPartId: getSelectedOntologyPartId(bldg.uuid) || getDefaultOntologyPartId(summary),
     groups,
@@ -629,6 +705,7 @@ function renderFullModelOntologyForBuilding(bldg) {
   if (!summary || parts.length === 0) {
     groups.fullModel.visible = !!document.getElementById('show-full-model')?.checked;
     groups.fullModelHeuristicRoof.visible = groups.fullModel.visible;
+    updateFullModelReferencePresentation(bldg);
     updateOntologyStatusInfo();
     return null;
   }
@@ -644,11 +721,51 @@ function renderFullModelOntologyForBuilding(bldg) {
   });
   fullModelEnhancementByUuid[bldg.uuid] = enhancement;
   const showFullModel = !!document.getElementById('show-full-model')?.checked;
-  groups.fullModel.visible = showFullModel && (fullModelDiffModeEnabled || !enhancement?.hasBaseShellReplacement);
-  groups.fullModelHeuristicRoof.visible = showFullModel && (fullModelDiffModeEnabled || !enhancement?.hasRoofReplacement);
+  groups.fullModel.visible = showFullModel;
+  groups.fullModelHeuristicRoof.visible = showFullModel;
   groups.fullModelOntology.visible = showFullModel;
+  updateFullModelReferencePresentation(bldg);
   updateOntologyStatusInfo();
   return enhancement;
+}
+
+function renderAncillaryBuildingLayers(bldg, pyResult) {
+  try {
+    roofClusterData = renderRoofFromPythonResult({
+      pyResult,
+      THREE,
+      groups,
+      createLine,
+      createPolygonMesh,
+      createEdgeLoop,
+      roofClusterColors: ROOF_CLUSTER_COLORS,
+      attachLocator,
+      buildingUuid: bldg.uuid,
+    });
+  } catch (err) {
+    roofClusterData = [];
+    console.error('Roof render failed', bldg?.uuid, err);
+  }
+  try {
+    renderOntologySemanticsForBuilding(bldg);
+  } catch (err) {
+    console.error('Ontology semantics render failed', bldg?.uuid, err);
+  }
+  try {
+    renderOntologyContinuationForBuilding(bldg);
+  } catch (err) {
+    console.error('Ontology continuation render failed', bldg?.uuid, err);
+  }
+  try {
+    renderOntologyExactForBuilding(bldg);
+  } catch (err) {
+    console.error('Ontology exact render failed', bldg?.uuid, err);
+  }
+  try {
+    maybeLoadOntologyForCurrentBuilding();
+  } catch (err) {
+    console.error('Ontology load trigger failed', bldg?.uuid, err);
+  }
 }
 
 function ensureOntologySummary(uuid) {
@@ -720,9 +837,10 @@ function maybeLoadOntologyForCurrentBuilding() {
   const bldg = DATA[currentBuilding];
   if (!bldg?.uuid) return;
   const showSemantics = !!document.getElementById('show-ontology-semantics')?.checked;
+  const showContinuation = !!document.getElementById('show-ontology-continuation')?.checked;
   const showCells = !!document.getElementById('show-ontology-cells')?.checked;
   const showFullModel = !!document.getElementById('show-full-model')?.checked;
-  if (!showSemantics && !showCells && !showFullModel) {
+  if (!showSemantics && !showContinuation && !showCells && !showFullModel) {
     updateOntologyStatusInfo();
     return;
   }
@@ -734,6 +852,7 @@ function maybeLoadOntologyForCurrentBuilding() {
       if (defaultPartId) selectedOntologyPartByUuid[bldg.uuid] = defaultPartId;
     }
     renderOntologySemanticsForBuilding(bldg);
+    renderOntologyContinuationForBuilding(bldg);
     renderLegend();
     if (showFullModel) {
       ensureOntologyAllParts(bldg.uuid, summary).then(() => {
@@ -928,7 +1047,7 @@ function getOrthoMap() {
 function loadBuilding(index, { resetPipeline = true } = {}) {
   currentBuilding = index;
   elementMeshByUid.clear();
-  [groups.merged, groups.computed, groups.doors, groups.windows, groups.floors, groups.gaps, groups.crossStory, groups.extensions, groups.overlaps, groups.wallClips, groups.extGaps, groups.ceilings, groups.thermalCeilings, groups.roofClusters, groups.fullModelHeuristicRoof, groups.fullModelOntology, groups.ontologySemantics, groups.ontologyCells, groups.fullModel, groups.selection].forEach(disposeGroup);
+  [groups.merged, groups.computed, groups.doors, groups.windows, groups.floors, groups.gaps, groups.crossStory, groups.extensions, groups.overlaps, groups.wallClips, groups.extGaps, groups.ceilings, groups.thermalCeilings, groups.roofClusters, groups.fullModelHeuristicRoof, groups.fullModelOntology, groups.ontologySemantics, groups.ontologyContinuation, groups.ontologyCells, groups.fullModel, groups.selection].forEach(disposeGroup);
   roofClusterData = [];
 
   const bldg = DATA[index];
@@ -1152,20 +1271,7 @@ function loadBuilding(index, { resetPipeline = true } = {}) {
   // if (bldg.roof_mesh_triangles && bldg.roof_mesh_triangles.length > 0) { ... }
 
   const pyResult = bldg.roof_surfaces ? bldg : pyRoofByUuid[bldg.uuid];
-  roofClusterData = renderRoofFromPythonResult({
-    pyResult,
-    THREE,
-    groups,
-    createLine,
-    createPolygonMesh,
-    createEdgeLoop,
-    roofClusterColors: ROOF_CLUSTER_COLORS,
-    attachLocator,
-    buildingUuid: bldg.uuid,
-  });
-  renderOntologySemanticsForBuilding(bldg);
-  renderOntologyExactForBuilding(bldg);
-  maybeLoadOntologyForCurrentBuilding();
+  renderAncillaryBuildingLayers(bldg, pyResult);
 
   // Thermal ceiling surfaces over detected gaps.
   // Skip cross_story gap ceilings when the roof pipeline produced thermal
@@ -1781,7 +1887,7 @@ bindUIEventHandlers({
   applyPipelineStep,
   setLayerVisibility,
   onLayerVisibilityChanged: (layer, visible) => {
-    if (layer === 'ontologySemantics' || layer === 'ontologyCells' || layer === 'fullModel') {
+    if (layer === 'ontologySemantics' || layer === 'ontologyContinuation' || layer === 'ontologyCells' || layer === 'fullModel') {
       const bldg = DATA[currentBuilding];
       if (bldg && layer === 'ontologyCells' && !visible) {
         const loadState = getOntologyLoadState(bldg.uuid);
@@ -1790,6 +1896,7 @@ bindUIEventHandlers({
       }
       if (bldg) {
         if (layer === 'ontologySemantics') renderOntologySemanticsForBuilding(bldg);
+        if (layer === 'ontologyContinuation') renderOntologyContinuationForBuilding(bldg);
         if (layer === 'ontologyCells') renderOntologyExactForBuilding(bldg);
         if (layer === 'fullModel') renderFullModelOntologyForBuilding(bldg);
       }
@@ -1983,12 +2090,22 @@ fetch(`buildings_3d.json?v=${Date.now()}`, { cache: 'no-store' })
         const idx = buildingIndexByUuid.get(parsed.buildingUuid);
         const b = data[idx];
         applyAlignmentStateToControls(alignmentByUuid[b.uuid] || {});
-        loadBuilding(idx);
+        try {
+          loadBuilding(idx);
+        } catch (err) {
+          console.error('Initial building load failed', b?.uuid, err);
+          document.getElementById('building-info').textContent = `Initial building load failed for ${b?.uuid || 'unknown building'}`;
+        }
         jumpToElementUid(pendingElementUid, { focus: true, updateHash: false });
       } else if (indices.length > 0) {
         const b = data[indices[0]];
         applyAlignmentStateToControls(alignmentByUuid[b.uuid] || {});
-        loadBuilding(indices[0]);
+        try {
+          loadBuilding(indices[0]);
+        } catch (err) {
+          console.error('Initial building load failed', b?.uuid, err);
+          document.getElementById('building-info').textContent = `Initial building load failed for ${b?.uuid || 'unknown building'}`;
+        }
       }
       pendingElementUid = null;
       pendingBuildingUuid = null;
@@ -1996,12 +2113,22 @@ fetch(`buildings_3d.json?v=${Date.now()}`, { cache: 'no-store' })
       const idx = buildingIndexByUuid.get(pendingBuildingUuid);
       const b = data[idx];
       applyAlignmentStateToControls(alignmentByUuid[b.uuid] || {});
-      loadBuilding(idx);
+      try {
+        loadBuilding(idx);
+      } catch (err) {
+        console.error('Initial building load failed', b?.uuid, err);
+        document.getElementById('building-info').textContent = `Initial building load failed for ${b?.uuid || 'unknown building'}`;
+      }
       pendingBuildingUuid = null;
     } else if (indices.length > 0) {
       const b = data[indices[0]];
       applyAlignmentStateToControls(alignmentByUuid[b.uuid] || {});
-      loadBuilding(indices[0]);
+      try {
+        loadBuilding(indices[0]);
+      } catch (err) {
+        console.error('Initial building load failed', b?.uuid, err);
+        document.getElementById('building-info').textContent = `Initial building load failed for ${b?.uuid || 'unknown building'}`;
+      }
     }
     animate();
   })

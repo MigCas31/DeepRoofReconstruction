@@ -94,6 +94,43 @@ def _continuation_stats(hypothesis_graph: dict[str, Any]) -> dict[str, dict[str,
     return stats
 
 
+def _exact_incidence_pairs_by_hypothesis(hypothesis_graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    pairs_by_hypothesis: dict[str, dict[str, Any]] = {}
+    for edge in hypothesis_graph.get("edges") or []:
+        if edge.get("type") != "CONTINUES_AS":
+            continue
+        evidence = edge.get("evidence") or {}
+        if not bool(evidence.get("exact_face_incidence")):
+            continue
+        hypothesis_id = str(edge.get("from") or "")
+        if not hypothesis_id:
+            continue
+        record = pairs_by_hypothesis.setdefault(
+            hypothesis_id,
+            {
+                "atom_ids": set(),
+                "atom_pairs": set(),
+            },
+        )
+        for pair in evidence.get("partition_atom_pairs") or []:
+            if not isinstance(pair, (list, tuple)) or len(pair) < 2:
+                continue
+            left = str(pair[0] or "")
+            right = str(pair[1] or "")
+            if not left or not right:
+                continue
+            record["atom_ids"].add(left)
+            record["atom_ids"].add(right)
+            record["atom_pairs"].add(tuple(sorted((left, right))))
+    out: dict[str, dict[str, Any]] = {}
+    for hypothesis_id, record in pairs_by_hypothesis.items():
+        out[hypothesis_id] = {
+            "atom_ids": sorted(record["atom_ids"]),
+            "atom_pairs": [list(pair) for pair in sorted(record["atom_pairs"])],
+        }
+    return out
+
+
 def _lift_polygon_to_surface(poly: Polygon, surface: dict[str, Any]) -> list[list[float]]:
     coords = list(poly.exterior.coords)
     if coords and coords[-1] == coords[0]:
@@ -148,6 +185,7 @@ def continue_roof_envelopes(
                 covered_rooms_by_hypothesis[hypothesis_id].add(room_index)
 
     continuation_stats = _continuation_stats(hypothesis_graph)
+    exact_incidence_by_hypothesis = _exact_incidence_pairs_by_hypothesis(hypothesis_graph)
     surfaces_by_hypothesis: dict[str, list[tuple[int, dict[str, Any], Polygon]]] = defaultdict(list)
     for index, surface in enumerate(selected_oblique_surfaces):
         hypothesis_id = str(surface.get("roof_hypothesis_id") or "")
@@ -189,6 +227,7 @@ def continue_roof_envelopes(
 
     continuation_proposals: dict[tuple[int, str], list[dict[str, Any]]] = defaultdict(list)
     continued_surfaces: list[dict[str, Any]] = []
+    continuation_regions: list[dict[str, Any]] = []
     continued_room_indices: set[int] = set()
 
     for room_index, room_partition in room_partitions_by_index.items():
@@ -237,6 +276,8 @@ def continue_roof_envelopes(
                 if part_id not in {str(v) for v in (building_part_graph.get("hypothesis_membership") or {}).get(hypothesis_id, [])}:
                     continue
                 stats = continuation_stats.get(hypothesis_id) or {}
+                exact_incidence = exact_incidence_by_hypothesis.get(hypothesis_id) or {}
+                exact_atom_ids = {str(atom_id) for atom_id in (exact_incidence.get("atom_ids") or [])}
                 adjacent_covered = sorted(
                     room_index_value
                     for room_index_value in room_adjacency.get(room_index, set())
@@ -253,6 +294,8 @@ def continue_roof_envelopes(
                 source_atoms = []
                 for source_atom in covered_atoms_by_hypothesis.get(hypothesis_id, []):
                     if source_atom["room_index"] not in adjacent_covered:
+                        continue
+                    if exact_atom_ids and str(source_atom["atom_id"]) not in exact_atom_ids:
                         continue
                     gap_distance = float(atom_poly.distance(source_atom["poly"]))
                     try:
@@ -297,6 +340,8 @@ def continue_roof_envelopes(
                     continue
                 exact_incidence_edges = int(stats.get("exact_incidence_edges", 0))
                 component_size = int(stats.get("continuation_component_size", 1))
+                exact_atom_pairs = list(exact_incidence.get("atom_pairs") or [])
+                exact_pair_count = len(exact_atom_pairs)
                 source_incidence_score = 0.0
                 if source_atoms:
                     source_incidence_score = max(
@@ -328,6 +373,9 @@ def continue_roof_envelopes(
                         "source_atoms": source_atoms,
                         "source_incidence_score": source_incidence_score,
                         "semantic_kinds": sorted(semantic_kinds),
+                        "exact_incidence_atom_pairs": exact_atom_pairs,
+                        "exact_incidence_pair_count": exact_pair_count,
+                        "exact_source_atom_ids": sorted({str(atom_data["atom_id"]) for atom_data in source_atoms}),
                     }
 
             if best is None:
@@ -362,10 +410,36 @@ def continue_roof_envelopes(
         best_proposal = max(proposals, key=lambda proposal: float(proposal["best"]["score"]))
         continued_room_indices.add(room_index)
         for region_index, region in enumerate(merged_regions):
+            polygon_xz = [[round(float(x), 6), round(float(z), 6)] for x, z, *_ in list(region.exterior.coords)[:-1]]
+            lifted_polygon = _lift_polygon_to_surface(region, best_proposal["best"]["source_surface"])
+            exact_pair_count = int(best_proposal["best"].get("exact_incidence_pair_count", 0) or 0)
+            continuation_regions.append(
+                {
+                    "id": f"continuation-region:{hypothesis_id}:{room_id}:{region_index}",
+                    "roof_hypothesis_id": hypothesis_id,
+                    "room_id": room_id,
+                    "room_index": room_index,
+                    "continuation_mode": "arrangement_face" if exact_pair_count > 0 else "arrangement_region",
+                    "polygon_xz": polygon_xz,
+                    "polygon": lifted_polygon,
+                    "source_surface_index": best_proposal["best"]["source_index"],
+                    "source_surface_kind": str(best_proposal["best"]["source_surface"].get("kind") or "oblique"),
+                    "source_atom_ids": list(best_proposal["best"].get("exact_source_atom_ids") or []),
+                    "target_atom_ids": [proposal["atom_id"] for proposal in proposals],
+                    "exact_incidence_atom_pairs": list(best_proposal["best"].get("exact_incidence_atom_pairs") or []),
+                    "exact_incidence_pair_count": exact_pair_count,
+                    "adjacent_room_indices": list(best_proposal["best"]["adjacent_covered"]),
+                    "distance_m": round(float(best_proposal["best"]["distance"]), 6),
+                    "clearance_m": round(float(best_proposal["best"]["clearance"]), 6),
+                    "continuation_score": round(float(best_proposal["best"]["score"]), 6),
+                    "hypothesis_support_score": round(float(best_proposal["best"]["support_score"]), 6),
+                    "semantic_kinds": list(best_proposal["best"].get("semantic_kinds") or []),
+                }
+            )
             continued_surface = dict(best_proposal["best"]["source_surface"])
-            continued_surface["corners"] = _lift_polygon_to_surface(region, best_proposal["best"]["source_surface"])
+            continued_surface["corners"] = lifted_polygon
             continued_surface["continued_from_surface_index"] = best_proposal["best"]["source_index"]
-            continued_surface["continuation_source"] = "coverage_subpart"
+            continued_surface["continuation_source"] = "arrangement_face"
             continued_surface["continuation_room_index"] = room_index
             continued_surface["continuation_region_index"] = region_index
             continued_surface["continuation_atom_id"] = proposals[0]["atom_id"]
@@ -378,6 +452,9 @@ def continue_roof_envelopes(
                 float(best_proposal["best"].get("source_incidence_score", 0.0)), 6
             )
             continued_surface["continuation_semantic_kinds"] = list(best_proposal["best"].get("semantic_kinds") or [])
+            continued_surface["continuation_exact_incidence_pair_count"] = int(
+                best_proposal["best"].get("exact_incidence_pair_count", 0) or 0
+            )
             continued_surfaces.append(continued_surface)
 
         synthetic_edge_score = min(
@@ -406,10 +483,13 @@ def continue_roof_envelopes(
                     "hypothesis_support_score": round(float(best_proposal["best"]["support_score"]), 6),
                     "edge_score": round(synthetic_edge_score, 6),
                     "relation_state": "continued",
-                    "continuation_source": "coverage_subpart",
+                    "continuation_source": "arrangement_face",
                     "continuation_atom_id": proposals[0]["atom_id"],
                     "continuation_atom_ids": [proposal["atom_id"] for proposal in proposals],
                     "continuation_semantic_kinds": list(best_proposal["best"].get("semantic_kinds") or []),
+                    "continuation_exact_incidence_pair_count": int(
+                        best_proposal["best"].get("exact_incidence_pair_count", 0) or 0
+                    ),
                 },
             }
         )
@@ -418,15 +498,18 @@ def continue_roof_envelopes(
     metadata = dict(augmented_graph.get("metadata") or {})
     metadata["continued_room_count"] = len(continued_room_indices)
     metadata["continued_surface_count"] = len(continued_surfaces)
+    metadata["continuation_region_count"] = len(continuation_regions)
     augmented_graph["metadata"] = metadata
 
     return {
         "selected_oblique_surfaces": list(selected_oblique_surfaces) + continued_surfaces,
         "hypothesis_graph": augmented_graph,
         "continued_surfaces": continued_surfaces,
+        "continuation_regions": continuation_regions,
         "continued_room_indices": sorted(continued_room_indices),
         "metadata": {
             "continued_room_count": len(continued_room_indices),
             "continued_surface_count": len(continued_surfaces),
+            "continuation_region_count": len(continuation_regions),
         },
     }

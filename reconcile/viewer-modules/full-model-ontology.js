@@ -32,6 +32,7 @@ function surfaceStyle(surface) {
   if (category === 'base_interior_wall') return { color: 0xe6e1d8, opacity: 0.82, renderOrder: 4, edgeOpacity: 0.14 };
   if (category === 'base_room_floor') return { color: 0xc8c2b7, opacity: 1.0, renderOrder: 3, edgeOpacity: 0.18 };
   if (category === 'base_room_ceiling') return { color: 0xd8d3ca, opacity: 0.28, renderOrder: 2, edgeOpacity: 0.12 };
+  if (category === 'fallback_room_ceiling') return { color: 0xf59e0b, opacity: 0.06, renderOrder: 2, edgeOpacity: 0.55 };
   if (category === 'base_window') return { color: 0x87ceeb, opacity: 0.28, renderOrder: 7, edgeOpacity: 0.72 };
   if (category === 'base_door') return { color: 0xc49a6c, opacity: 0.92, renderOrder: 7, edgeOpacity: 0.7 };
   if (category === 'base_opening') return { color: 0x0a0e1b, opacity: 0.82, renderOrder: 7, edgeOpacity: 0.82 };
@@ -57,6 +58,7 @@ function diffSurfaceStyle(surface) {
   if (category === 'base_interior_wall') return { color: 0xf59e0b, opacity: 0.28, renderOrder: 6, edgeOpacity: 0.76 };
   if (category === 'base_room_floor') return { color: 0xfbbf24, opacity: 0.36, renderOrder: 6, edgeOpacity: 0.78 };
   if (category === 'base_room_ceiling') return { color: 0xfb7185, opacity: 0.26, renderOrder: 5, edgeOpacity: 0.72 };
+  if (category === 'fallback_room_ceiling') return { color: 0xf59e0b, opacity: 0.12, renderOrder: 5, edgeOpacity: 0.95 };
   if (category === 'base_window') return { color: 0x38bdf8, opacity: 0.48, renderOrder: 8, edgeOpacity: 0.9 };
   if (category === 'base_door') return { color: 0xfb923c, opacity: 0.56, renderOrder: 8, edgeOpacity: 0.9 };
   if (category === 'base_opening') return { color: 0xffffff, opacity: 0.22, renderOrder: 8, edgeOpacity: 0.95 };
@@ -79,6 +81,7 @@ function surfaceLocatorKind(surface) {
   if (category === 'base_interior_wall') return 'ontology-base-interior-wall';
   if (category === 'base_room_floor') return 'ontology-base-floor';
   if (category === 'base_room_ceiling') return 'ontology-base-ceiling';
+  if (category === 'fallback_room_ceiling') return 'ontology-fallback-ceiling';
   if (category === 'base_window') return 'ontology-base-window';
   if (category === 'base_door') return 'ontology-base-door';
   if (category === 'base_opening') return 'ontology-base-opening';
@@ -116,6 +119,7 @@ export function renderOntologyEnhancedFullModel({
     exteriorWallCount: 0,
     occupiedSurfaceCount: 0,
     ceilingSurfaceCount: 0,
+    fallbackCeilingCount: 0,
     kneeWallCount: 0,
     unresolvedCount: 0,
   };
@@ -150,6 +154,7 @@ export function renderOntologyEnhancedFullModel({
       else if (category === 'base_exterior_wall' || category === 'base_interior_wall') counts.baseWallCount += 1;
       else if (category === 'base_room_floor') counts.baseFloorCount += 1;
       else if (category === 'base_room_ceiling') counts.ceilingSurfaceCount += 1;
+      else if (category === 'fallback_room_ceiling') counts.fallbackCeilingCount += 1;
       else if (category === 'base_window' || category === 'base_door' || category === 'base_opening') counts.fenestrationCount += 1;
       else if (category === 'exterior_wall') counts.exteriorWallCount += 1;
       else if (category === 'knee_wall') counts.kneeWallCount += 1;
@@ -169,6 +174,7 @@ export function renderOntologyEnhancedFullModel({
       counts.exteriorWallCount > 0 ||
       counts.occupiedSurfaceCount > 0 ||
       counts.ceilingSurfaceCount > 0 ||
+      counts.fallbackCeilingCount > 0 ||
       counts.kneeWallCount > 0 ||
       counts.unresolvedCount > 0,
     hasRoofReplacement: counts.roofFaceCount > 0,

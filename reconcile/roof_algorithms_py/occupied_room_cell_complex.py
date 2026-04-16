@@ -77,7 +77,87 @@ def _footprint_from_polygon(poly: Polygon) -> list[tuple[float, float]]:
         footprint.append(point)
     if len(footprint) >= 2 and same_point(footprint[0], footprint[-1]):
         footprint.pop()
+    if len(footprint) < 3:
+        return footprint
+
+    simplified: list[tuple[float, float]] = []
+    count = len(footprint)
+    for index, current in enumerate(footprint):
+        prev = footprint[index - 1]
+        nxt = footprint[(index + 1) % count]
+        vx1 = current[0] - prev[0]
+        vz1 = current[1] - prev[1]
+        vx2 = nxt[0] - current[0]
+        vz2 = nxt[1] - current[1]
+        cross = vx1 * vz2 - vz1 * vx2
+        if abs(cross) <= 1e-5:
+            continue
+        simplified.append(current)
+    if len(simplified) >= 3:
+        footprint = simplified
     return footprint
+
+
+def _candidate_footprints(poly: Polygon) -> list[list[tuple[float, float]]]:
+    candidates: list[list[tuple[float, float]]] = []
+    seen: set[tuple[tuple[float, float], ...]] = set()
+
+    def add(candidate_poly: Polygon | None) -> None:
+        if candidate_poly is None or candidate_poly.is_empty or candidate_poly.area <= AREA_EPS:
+            return
+        footprint = _footprint_from_polygon(candidate_poly)
+        if len(footprint) < 3:
+            return
+        key = tuple(footprint)
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(footprint)
+
+    add(poly)
+    try:
+        hull = poly.convex_hull
+    except Exception:
+        hull = None
+    if isinstance(hull, Polygon) and not hull.is_empty:
+        area_delta = abs(float(hull.area) - float(poly.area))
+        if area_delta <= max(AREA_EPS, float(poly.area) * 0.02):
+            add(hull)
+    return candidates
+
+
+def _top_face_area(cell: dict[str, Any]) -> float:
+    best = 0.0
+    for face in (cell.get("faces") or []):
+        if not isinstance(face, dict):
+            continue
+        if str(face.get("kind") or "") != "top":
+            continue
+        best = max(best, float(face.get("area_m2") or 0.0))
+    return best
+
+
+def _build_best_candidate_cell(
+    *,
+    candidate_footprints: list[list[tuple[float, float]]],
+    build_cell,
+) -> dict[str, Any] | None:
+    best_cell: dict[str, Any] | None = None
+    best_score: tuple[int, float, float] | None = None
+    for footprint in candidate_footprints:
+        cell = build_cell(footprint)
+        if cell is None or float(cell.get("volume_m3", 0.0) or 0.0) <= EPS:
+            continue
+        top_area = _top_face_area(cell)
+        score = (
+            1 if top_area > AREA_EPS else 0,
+            round(top_area, 6),
+            round(float(cell.get("volume_m3", 0.0) or 0.0), 6),
+        )
+        if best_score is None or score > best_score:
+            best_cell = cell
+            best_score = score
+    return best_cell
 
 
 def _room_fallback_top_y(room: dict[str, Any], base_y: float) -> float:
@@ -153,6 +233,16 @@ def _room_footprint_polygon(room: dict[str, Any]) -> Polygon | None:
     return hull
 
 
+def _partition_room_outline_polygon(room_partition: dict[str, Any] | None) -> Polygon | None:
+    if not isinstance(room_partition, dict):
+        return None
+    outline = room_partition.get("room_outline") or []
+    poly = _poly_xz_from_3d(outline)
+    if poly is None or poly.area <= AREA_EPS:
+        return None
+    return poly
+
+
 def _room_base_y(room: dict[str, Any]) -> float:
     floor_polygon = room.get("floor_polygon") or []
     if floor_polygon:
@@ -199,12 +289,19 @@ def _merged_partition_regions(room_partition: dict[str, Any]) -> list[dict[str, 
                 },
                 "atom_ids": [],
                 "polys": [],
+                "atoms": [],
             },
         )
         atom_id = str(atom.get("id") or "")
         if atom_id:
             group["atom_ids"].append(atom_id)
         group["polys"].append(poly)
+        group["atoms"].append(
+            {
+                "atom_id": atom_id,
+                "polygon": poly,
+            }
+        )
 
     merged_regions: list[dict[str, Any]] = []
     for group in groups.values():
@@ -212,6 +309,29 @@ def _merged_partition_regions(room_partition: dict[str, Any]) -> list[dict[str, 
             union_poly = unary_union(group["polys"])
         except Exception:
             union_poly = None
+        union_suspect = union_poly is None or getattr(union_poly, "is_empty", True)
+        if not union_suspect:
+            for atom in group["atoms"]:
+                try:
+                    missing_area = float(atom["polygon"].difference(union_poly).area)
+                except Exception:
+                    missing_area = float(atom["polygon"].area)
+                if missing_area > AREA_EPS:
+                    union_suspect = True
+                    break
+        if union_suspect:
+            for atom in group["atoms"]:
+                piece = atom["polygon"]
+                if piece is None or piece.is_empty or piece.area <= AREA_EPS:
+                    continue
+                merged_regions.append(
+                    {
+                        "surface": dict(group["surface"]),
+                        "atom_ids": [atom["atom_id"]] if atom["atom_id"] else [],
+                        "polygon": piece,
+                    }
+                )
+            continue
         for piece in _decompose_polygons(union_poly):
             if not piece.is_valid:
                 try:
@@ -276,7 +396,11 @@ def _annotate_boundary_classes(cell: dict[str, Any], room_poly: Polygon, story_u
             story_overlap = _boundary_overlap_length(face, story_union)
             if story_overlap > EPS:
                 boundary_class = "exterior_wall"
-            elif room_overlap > EPS or role == "wall":
+            elif room_overlap > EPS:
+                boundary_class = "interior_wall"
+            elif role == "wall" and bool(metadata.get("perimeter_facing")):
+                boundary_class = "splitter"
+            elif role == "wall":
                 boundary_class = "interior_wall"
             else:
                 boundary_class = "splitter"
@@ -319,7 +443,8 @@ def build_occupied_room_cell_complex(
     for room_index, room in enumerate(bldg.get("rooms") or []):
         room_id = _room_key(room_index)
         story = int(room.get("story", 0) or 0)
-        room_poly = _room_footprint_polygon(room)
+        room_partition = room_partitions_by_index.get(room_index)
+        room_poly = _partition_room_outline_polygon(room_partition) or _room_footprint_polygon(room)
         if room_poly is None or room_poly.area <= AREA_EPS:
             continue
         base_y = _room_base_y(room)
@@ -327,7 +452,6 @@ def build_occupied_room_cell_complex(
         part_id = part_ids[0] if part_ids else None
         story_union = story_unions.get(story)
         room_cell_count_before = len(cells)
-        room_partition = room_partitions_by_index.get(room_index)
         merged_regions = _merged_partition_regions(room_partition or {})
         covered_polys: list[Polygon] = []
         for merged_region in merged_regions:
@@ -338,48 +462,45 @@ def build_occupied_room_cell_complex(
             for convex_index, convex_region in enumerate(_convex_subregions(merged_poly)):
                 if convex_region.is_empty or convex_region.area <= AREA_EPS:
                     continue
-                footprint = _footprint_from_polygon(convex_region)
-                if len(footprint) < 3:
-                    continue
                 perimeter_side_face_indices = _perimeter_side_face_indices(convex_region, room_poly)
-                cell_id = (
-                    f"occupied-cell:{_stable_hash([room_id, ':'.join(atom_ids), str(convex_index), str(footprint)], 20)}"
+                candidate_footprints = _candidate_footprints(convex_region)
+                cell = _build_best_candidate_cell(
+                    candidate_footprints=candidate_footprints,
+                    build_cell=lambda footprint, atom_ids=atom_ids, convex_index=convex_index: build_arranged_polyhedral_cell(
+                        cell_id=f"occupied-cell:{_stable_hash([room_id, ':'.join(atom_ids), str(convex_index), str(footprint)], 20)}",
+                        room_id=room_id,
+                        room_index=room_index,
+                        part_id=part_id,
+                        story=story,
+                        base_atom_id=(atom_ids[0] if atom_ids else f"fallback:{room_id}"),
+                        cell_kind="occupied_room",
+                        region_footprint=footprint,
+                        base_y=base_y,
+                        top_y_at=lambda x, z, top_surface=surface: _surface_y_at(top_surface, x, z),
+                        top_surface_kind=surface["kind"],
+                        roof_hypothesis_id=surface["roof_hypothesis_id"],
+                        perimeter_side_face_indices=perimeter_side_face_indices,
+                    ),
                 )
-                cell = build_arranged_polyhedral_cell(
-                    cell_id=cell_id,
-                    room_id=room_id,
-                    room_index=room_index,
-                    part_id=part_id,
-                    story=story,
-                    base_atom_id=(atom_ids[0] if atom_ids else f"fallback:{room_id}"),
-                    cell_kind="occupied_room",
-                    region_footprint=footprint,
-                    base_y=base_y,
-                    top_y_at=lambda x, z, top_surface=surface: _surface_y_at(top_surface, x, z),
-                    top_surface_kind=surface["kind"],
-                    roof_hypothesis_id=surface["roof_hypothesis_id"],
-                    perimeter_side_face_indices=perimeter_side_face_indices,
-                )
-                if cell is None or float(cell.get("volume_m3", 0.0) or 0.0) <= EPS:
-                    continue
-                region_built = True
-                atom_bound_cell_count += 1
-                covered_room_ids.add(room_id)
-                cell["top_boundary_atom_id"] = atom_ids[0] if atom_ids else None
-                cell["top_boundary_atom_ids"] = atom_ids
-                cell["ceiling_partition_kind"] = surface["kind"]
-                cell["exact_source_kind"] = "top_boundary_atom"
-                _annotate_boundary_classes(cell, room_poly, story_union)
-                cells.append(cell)
-                for atom_id in atom_ids:
-                    edges.append(
-                        {
-                            "id": f"edge:occupied-atom:{_stable_hash([atom_id, cell_id], 20)}",
-                            "type": "BOUNDS_OCCUPIED_CELL",
-                            "from": atom_id,
-                            "to": cell_id,
-                        }
-                    )
+                if cell is not None:
+                    region_built = True
+                    atom_bound_cell_count += 1
+                    covered_room_ids.add(room_id)
+                    cell["top_boundary_atom_id"] = atom_ids[0] if atom_ids else None
+                    cell["top_boundary_atom_ids"] = atom_ids
+                    cell["ceiling_partition_kind"] = surface["kind"]
+                    cell["exact_source_kind"] = "top_boundary_atom"
+                    _annotate_boundary_classes(cell, room_poly, story_union)
+                    cells.append(cell)
+                    for atom_id in atom_ids:
+                        edges.append(
+                            {
+                                "id": f"edge:occupied-atom:{_stable_hash([atom_id, cell['id']], 20)}",
+                                "type": "BOUNDS_OCCUPIED_CELL",
+                                "from": atom_id,
+                                "to": cell["id"],
+                            }
+                        )
             if region_built:
                 covered_polys.append(merged_poly)
         remainder = room_poly
@@ -398,17 +519,64 @@ def build_occupied_room_cell_complex(
             for convex_index, convex_region in enumerate(_convex_subregions(remainder_piece)):
                 if convex_region.is_empty or convex_region.area <= AREA_EPS:
                     continue
-                footprint = _footprint_from_polygon(convex_region)
-                if len(footprint) < 3:
-                    continue
                 synthetic_atom_id = (
-                    f"implicit-flat-atom:{_stable_hash([room_id, str(remainder_index), str(convex_index), str(footprint)], 20)}"
+                    f"implicit-flat-atom:{_stable_hash([room_id, str(remainder_index), str(convex_index), 'remainder'], 20)}"
                 )
                 synthetic_surface = _synthetic_surface_from_polygon(convex_region, top_y=top_y)
                 perimeter_side_face_indices = _perimeter_side_face_indices(convex_region, room_poly)
-                cell_id = f"occupied-cell:{_stable_hash([room_id, 'implicit-flat', str(remainder_index), str(convex_index), str(footprint)], 20)}"
-                cell = build_arranged_polyhedral_cell(
-                    cell_id=cell_id,
+                candidate_footprints = _candidate_footprints(convex_region)
+                cell = _build_best_candidate_cell(
+                    candidate_footprints=candidate_footprints,
+                    build_cell=lambda footprint, remainder_index=remainder_index, convex_index=convex_index: build_arranged_polyhedral_cell(
+                        cell_id=f"occupied-cell:{_stable_hash([room_id, 'implicit-flat', str(remainder_index), str(convex_index), str(footprint)], 20)}",
+                        room_id=room_id,
+                        room_index=room_index,
+                        part_id=part_id,
+                        story=story,
+                        base_atom_id=synthetic_atom_id,
+                        cell_kind="occupied_room",
+                        region_footprint=footprint,
+                        base_y=base_y,
+                        top_y_at=lambda _x, _z, y=top_y: y,
+                        top_surface_kind="flat",
+                        roof_hypothesis_id=None,
+                        perimeter_side_face_indices=perimeter_side_face_indices,
+                    ),
+                )
+                if cell is not None:
+                    atom_bound_cell_count += 1
+                    synthetic_atom_cell_count += 1
+                    covered_room_ids.add(room_id)
+                    cell["top_boundary_atom_id"] = synthetic_atom_id
+                    cell["top_boundary_atom_ids"] = [synthetic_atom_id]
+                    cell["ceiling_partition_kind"] = "flat"
+                    cell["exact_source_kind"] = "synthetic_top_boundary_atom"
+                    cell["synthetic_top_boundary_surface"] = synthetic_surface
+                    _annotate_boundary_classes(cell, room_poly, story_union)
+                    cells.append(cell)
+                    edges.append(
+                        {
+                            "id": f"edge:occupied-atom:{_stable_hash([synthetic_atom_id, cell['id']], 20)}",
+                            "type": "BOUNDS_OCCUPIED_CELL",
+                            "from": synthetic_atom_id,
+                            "to": cell["id"],
+                        }
+                    )
+
+        if len(cells) > room_cell_count_before:
+            continue
+
+        for convex_index, convex_region in enumerate(_convex_subregions(room_poly)):
+            if convex_region.is_empty or convex_region.area <= AREA_EPS:
+                continue
+            synthetic_atom_id = f"implicit-flat-atom:{_stable_hash([room_id, 'whole-room', str(convex_index)], 20)}"
+            synthetic_surface = _synthetic_surface_from_polygon(convex_region, top_y=top_y)
+            perimeter_side_face_indices = _perimeter_side_face_indices(convex_region, room_poly)
+            candidate_footprints = _candidate_footprints(convex_region)
+            cell = _build_best_candidate_cell(
+                candidate_footprints=candidate_footprints,
+                build_cell=lambda footprint, convex_index=convex_index: build_arranged_polyhedral_cell(
+                    cell_id=f"occupied-cell:{_stable_hash([room_id, 'implicit-flat-whole-room', str(convex_index), str(footprint)], 20)}",
                     room_id=room_id,
                     room_index=room_index,
                     part_id=part_id,
@@ -421,9 +589,9 @@ def build_occupied_room_cell_complex(
                     top_surface_kind="flat",
                     roof_hypothesis_id=None,
                     perimeter_side_face_indices=perimeter_side_face_indices,
-                )
-                if cell is None or float(cell.get("volume_m3", 0.0) or 0.0) <= EPS:
-                    continue
+                ),
+            )
+            if cell is not None:
                 atom_bound_cell_count += 1
                 synthetic_atom_cell_count += 1
                 covered_room_ids.add(room_id)
@@ -436,61 +604,12 @@ def build_occupied_room_cell_complex(
                 cells.append(cell)
                 edges.append(
                     {
-                        "id": f"edge:occupied-atom:{_stable_hash([synthetic_atom_id, cell_id], 20)}",
+                        "id": f"edge:occupied-atom:{_stable_hash([synthetic_atom_id, cell['id']], 20)}",
                         "type": "BOUNDS_OCCUPIED_CELL",
                         "from": synthetic_atom_id,
-                        "to": cell_id,
+                        "to": cell["id"],
                     }
                 )
-
-        if len(cells) > room_cell_count_before:
-            continue
-
-        for convex_index, convex_region in enumerate(_convex_subregions(room_poly)):
-            if convex_region.is_empty or convex_region.area <= AREA_EPS:
-                continue
-            footprint = _footprint_from_polygon(convex_region)
-            if len(footprint) < 3:
-                continue
-            synthetic_atom_id = f"implicit-flat-atom:{_stable_hash([room_id, 'whole-room', str(convex_index), str(footprint)], 20)}"
-            synthetic_surface = _synthetic_surface_from_polygon(convex_region, top_y=top_y)
-            perimeter_side_face_indices = _perimeter_side_face_indices(convex_region, room_poly)
-            cell_id = f"occupied-cell:{_stable_hash([room_id, 'implicit-flat-whole-room', str(convex_index), str(footprint)], 20)}"
-            cell = build_arranged_polyhedral_cell(
-                cell_id=cell_id,
-                room_id=room_id,
-                room_index=room_index,
-                part_id=part_id,
-                story=story,
-                base_atom_id=synthetic_atom_id,
-                cell_kind="occupied_room",
-                region_footprint=footprint,
-                base_y=base_y,
-                top_y_at=lambda _x, _z, y=top_y: y,
-                top_surface_kind="flat",
-                roof_hypothesis_id=None,
-                perimeter_side_face_indices=perimeter_side_face_indices,
-            )
-            if cell is None or float(cell.get("volume_m3", 0.0) or 0.0) <= EPS:
-                continue
-            atom_bound_cell_count += 1
-            synthetic_atom_cell_count += 1
-            covered_room_ids.add(room_id)
-            cell["top_boundary_atom_id"] = synthetic_atom_id
-            cell["top_boundary_atom_ids"] = [synthetic_atom_id]
-            cell["ceiling_partition_kind"] = "flat"
-            cell["exact_source_kind"] = "synthetic_top_boundary_atom"
-            cell["synthetic_top_boundary_surface"] = synthetic_surface
-            _annotate_boundary_classes(cell, room_poly, story_union)
-            cells.append(cell)
-            edges.append(
-                {
-                    "id": f"edge:occupied-atom:{_stable_hash([synthetic_atom_id, cell_id], 20)}",
-                    "type": "BOUNDS_OCCUPIED_CELL",
-                    "from": synthetic_atom_id,
-                    "to": cell_id,
-                }
-            )
 
     face_class_counts: dict[str, int] = defaultdict(int)
     for cell in cells:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from reconcile.roof_algorithms_py.ceiling_plane_generation import collect_room_top_boundary_records
 from reconcile.roof_algorithms_py.roof_cell_complex import build_roof_cell_complex
 from reconcile.roof_algorithms_py.roof_coverage_graph import build_roof_coverage_graph
 from reconcile.roof_algorithms_py.roof_evidence_graph import build_roof_evidence_graph
@@ -94,7 +95,7 @@ def test_top_boundary_graph_uses_exact_attic_cell_for_flat_cap_in_sloped_part() 
     )
 
     top_boundary = build_top_boundary_graph(
-        exposed_rooms=exposed_rooms,
+        room_records=exposed_rooms,
         room_partitions=room_partitions,
         building_part_graph=building_part_graph,
         roof_coverage_graph=roof_coverage_graph,
@@ -203,7 +204,7 @@ def test_top_boundary_graph_marks_flat_transition_cap_inside_mixed_room() -> Non
     )
 
     top_boundary = build_top_boundary_graph(
-        exposed_rooms=exposed_rooms,
+        room_records=exposed_rooms,
         room_partitions=room_partitions,
         building_part_graph=building_part_graph,
         roof_coverage_graph=roof_coverage_graph,
@@ -269,7 +270,7 @@ def test_top_boundary_graph_uses_partial_sloped_coverage_before_attic_inference(
     )
 
     top_boundary = build_top_boundary_graph(
-        exposed_rooms=exposed_rooms,
+        room_records=exposed_rooms,
         room_partitions=room_partitions,
         building_part_graph=building_part_graph,
         roof_coverage_graph=roof_coverage_graph,
@@ -321,7 +322,7 @@ def test_top_boundary_graph_keeps_unsupported_ceiling_cap_as_flat_ceiling_withou
     }
 
     top_boundary = build_top_boundary_graph(
-        exposed_rooms=exposed_rooms,
+        room_records=exposed_rooms,
         room_partitions=room_partitions,
         building_part_graph=building_part_graph,
         roof_coverage_graph={"atom_coverage": {}, "room_subpart_membership": {}, "atom_subpart_membership": {}},
@@ -335,6 +336,272 @@ def test_top_boundary_graph_keeps_unsupported_ceiling_cap_as_flat_ceiling_withou
     assert flat_atom["role"] == "flat_ceiling"
     assert room_summary["has_candidate_attic_relation"] is False
     assert room_summary["has_resolved_roof_relation"] is False
+
+
+def test_top_boundary_graph_promotes_selected_flat_hypothesis_without_sloped_context_to_flat_ceiling() -> None:
+    exposed_rooms = [
+        {
+            "room_index": 0,
+            "graph_room_id": "room:r0",
+            "fp": _rect(0.0, 0.0, 4.0, 4.0),
+            "wallTopY": 2.8,
+            "wallTopMin": 2.1,
+        }
+    ]
+    room_partitions = [
+        {
+            "room_index": 0,
+            "story": 0,
+            "mixed": False,
+            "partitions": [
+                {
+                    "id": "atom:flat:selected",
+                    "room_index": 0,
+                    "story": 0,
+                    "kind": "flat",
+                    "roof_hypothesis_id": "roof-hypothesis:flat:0",
+                    "flat_role": "roof_flat",
+                    "flat_role_reason": "selected_flat_hypothesis",
+                    "poly": _rect(0.0, 0.0, 4.0, 4.0, y=2.3),
+                    "area_m2": 16.0,
+                }
+            ],
+        }
+    ]
+    building_part_graph = {
+        "nodes": [{"id": "part:0", "type": "BuildingPart", "roof_family_guess": "gable_or_multi_slope"}],
+        "room_membership": {"room:0": ["part:0"]},
+        "hypothesis_membership": {"roof-hypothesis:flat:0": ["part:0"]},
+    }
+
+    top_boundary = build_top_boundary_graph(
+        room_records=exposed_rooms,
+        room_partitions=room_partitions,
+        building_part_graph=building_part_graph,
+        roof_coverage_graph={"atom_coverage": {}, "room_subpart_membership": {}, "atom_subpart_membership": {}},
+        roof_cell_complex={"cells": [], "edges": []},
+        roof_evidence_graph={"atom_evidence": {}, "room_evidence": {}},
+    )
+
+    flat_atom = next(node for node in top_boundary["nodes"] if node.get("id") == "atom:flat:selected")
+    room_summary = top_boundary["room_summaries"]["room:0"]
+
+    assert flat_atom["role"] == "flat_ceiling"
+    assert flat_atom["reason"] == "selected_flat_hypothesis_without_sloped_context"
+    assert room_summary["has_candidate_attic_relation"] is False
+
+
+def test_top_boundary_graph_keeps_ambiguous_flat_as_ceiling_when_room_part_is_not_sloped() -> None:
+    exposed_rooms = [
+        {
+            "room_index": 0,
+            "graph_room_id": "room:r0",
+            "fp": _rect(0.0, 0.0, 4.0, 4.0),
+            "wallTopY": 3.4,
+            "wallTopMin": 2.1,
+        }
+    ]
+    room_partitions = [
+        {
+            "room_index": 0,
+            "story": 0,
+            "mixed": False,
+            "partitions": [
+                {
+                    "id": "atom:flat:ambiguous",
+                    "room_index": 0,
+                    "story": 0,
+                    "kind": "flat",
+                    "roof_hypothesis_id": "roof-hypothesis:flat:0",
+                    "flat_role": "ambiguous_flat_over_sloped_part",
+                    "flat_role_reason": "flat_hypothesis_spans_sloped_building_part",
+                    "poly": _rect(0.0, 0.0, 4.0, 4.0, y=2.3),
+                    "area_m2": 16.0,
+                }
+            ],
+        }
+    ]
+    building_part_graph = {
+        "nodes": [{"id": "part:0", "type": "BuildingPart", "roof_family_guess": "flat_or_capped"}],
+        "room_membership": {"room:0": ["part:0"]},
+        "hypothesis_membership": {"roof-hypothesis:flat:0": ["part:0"]},
+    }
+
+    top_boundary = build_top_boundary_graph(
+        room_records=exposed_rooms,
+        room_partitions=room_partitions,
+        building_part_graph=building_part_graph,
+        roof_coverage_graph={"atom_coverage": {}, "room_subpart_membership": {}, "atom_subpart_membership": {}},
+        roof_cell_complex={"cells": [], "edges": []},
+        roof_evidence_graph={"atom_evidence": {}, "room_evidence": {}},
+    )
+
+    flat_atom = next(node for node in top_boundary["nodes"] if node.get("id") == "atom:flat:ambiguous")
+    room_summary = top_boundary["room_summaries"]["room:0"]
+
+    assert flat_atom["role"] == "flat_ceiling"
+    assert flat_atom["reason"] == "ambiguous_flat_without_local_sloped_support"
+    assert room_summary["has_candidate_attic_relation"] is False
+
+
+def test_top_boundary_graph_keeps_ambiguous_flat_as_ceiling_without_local_support_even_if_room_has_gabled_membership() -> None:
+    exposed_rooms = [
+        {
+            "room_index": 0,
+            "graph_room_id": "room:r0",
+            "fp": _rect(0.0, 0.0, 4.0, 4.0),
+            "wallTopY": 3.4,
+            "wallTopMin": 1.0,
+        }
+    ]
+    room_partitions = [
+        {
+            "room_index": 0,
+            "story": 0,
+            "mixed": False,
+            "partitions": [
+                {
+                    "id": "atom:flat:ambiguous",
+                    "room_index": 0,
+                    "story": 0,
+                    "kind": "flat",
+                    "roof_hypothesis_id": "roof-hypothesis:flat:0",
+                    "flat_role": "ambiguous_flat_over_sloped_part",
+                    "flat_role_reason": "flat_hypothesis_spans_sloped_building_part",
+                    "poly": _rect(0.0, 0.0, 4.0, 4.0, y=2.3),
+                    "area_m2": 16.0,
+                }
+            ],
+        }
+    ]
+    building_part_graph = {
+        "nodes": [
+            {"id": "part:gable", "type": "BuildingPart", "roof_family_guess": "gable_or_multi_slope"},
+            {"id": "part:flat", "type": "BuildingPart", "roof_family_guess": "flat_or_capped"},
+        ],
+        "room_membership": {"room:0": ["part:gable", "part:flat"]},
+        "hypothesis_membership": {"roof-hypothesis:flat:0": ["part:flat"]},
+    }
+
+    top_boundary = build_top_boundary_graph(
+        room_records=exposed_rooms,
+        room_partitions=room_partitions,
+        building_part_graph=building_part_graph,
+        roof_coverage_graph={"atom_coverage": {}, "room_subpart_membership": {}, "atom_subpart_membership": {}},
+        roof_cell_complex={"cells": [], "edges": []},
+        roof_evidence_graph={"atom_evidence": {}, "room_evidence": {}},
+    )
+
+    flat_atom = next(node for node in top_boundary["nodes"] if node.get("id") == "atom:flat:ambiguous")
+    room_summary = top_boundary["room_summaries"]["room:0"]
+
+    assert flat_atom["role"] == "flat_ceiling"
+    assert flat_atom["reason"] == "ambiguous_flat_without_local_sloped_support"
+    assert room_summary["has_candidate_attic_relation"] is False
+
+
+def test_top_boundary_graph_infers_flat_transition_cap_for_strong_upper_void_room_in_sloped_part() -> None:
+    exposed_rooms = [
+        {
+            "room_index": 0,
+            "graph_room_id": "room:r0",
+            "fp": _rect(0.0, 0.0, 4.0, 4.0),
+            "wallTopY": 3.4,
+            "wallTopMin": 2.5,
+        }
+    ]
+    room_partitions = [
+        {
+            "room_index": 0,
+            "story": 0,
+            "mixed": True,
+            "partitions": [
+                {
+                    "id": "atom:flat:0",
+                    "room_index": 0,
+                    "story": 0,
+                    "kind": "flat",
+                    "roof_hypothesis_id": "roof-hypothesis:flat:0",
+                    "poly": _rect(0.0, 0.0, 4.0, 4.0, y=2.6),
+                    "area_m2": 16.0,
+                }
+            ],
+        }
+    ]
+    building_part_graph = {
+        "nodes": [{"id": "part:0", "type": "BuildingPart", "roof_family_guess": "gable_or_multi_slope"}],
+        "room_membership": {"room:0": ["part:0"]},
+        "hypothesis_membership": {},
+    }
+    roof_evidence_graph = {
+        "atom_evidence": {
+            "atom:flat:0": {
+                "atom_id": "atom:flat:0",
+                "room_id": "room:0",
+                "room_index": 0,
+                "kind": "flat",
+                "sloped_context": False,
+                "flat_cap_under_slope": False,
+                "upper_void_cell_count": 0,
+                "attic_cell_count": 0,
+            }
+        },
+        "room_evidence": {
+            "room:0": {
+                "room_id": "room:0",
+                "room_index": 0,
+                "strong_upper_void_context": True,
+                "strong_attic_context": False,
+                "strong_perimeter_sloped": True,
+                "strong_knee_wall_signal": True,
+                "evidence_score": 8,
+            }
+        },
+    }
+
+    top_boundary = build_top_boundary_graph(
+        room_records=exposed_rooms,
+        room_partitions=room_partitions,
+        building_part_graph=building_part_graph,
+        roof_coverage_graph={"atom_coverage": {}, "room_subpart_membership": {}, "atom_subpart_membership": {}},
+        roof_cell_complex={"cells": [], "edges": []},
+        roof_evidence_graph=roof_evidence_graph,
+    )
+
+    flat_atom = next(node for node in top_boundary["nodes"] if node.get("id") == "atom:flat:0")
+    room_summary = top_boundary["room_summaries"]["room:0"]
+
+    assert flat_atom["role"] == "flat_transition_cap_inferred"
+    assert flat_atom["reason"] == "strong_upper_void_room_in_sloped_part"
+    assert room_summary["has_candidate_attic_relation"] is False
+    assert room_summary["has_inferred_upper_void_relation"] is True
+
+
+def test_collect_room_top_boundary_records_uses_original_floor_polygon_when_floor_polygon_is_empty() -> None:
+    building = {
+        "rooms": [
+            {
+                "story": 1,
+                "floor_polygon": [],
+                "floor_polygon_original": _rect(0.0, 0.0, 2.0, 2.0, y=1.0),
+                "walls_computed": [
+                    {"corners": [[0.0, 1.0, 0.0], [2.0, 1.0, 0.0], [2.0, 2.8, 0.0], [0.0, 2.8, 0.0]]},
+                    {"corners": [[2.0, 1.0, 0.0], [2.0, 1.0, 2.0], [2.0, 2.8, 2.0], [2.0, 2.8, 0.0]]},
+                ],
+            }
+        ]
+    }
+
+    records = collect_room_top_boundary_records(
+        building,
+        has_floor_above=lambda _x, _z, _story: False,
+        graph=None,
+    )
+
+    assert len(records) == 1
+    assert records[0]["room_index"] == 0
+    assert records[0]["fp"] == _rect(0.0, 0.0, 2.0, 2.0, y=1.0)
+    assert records[0]["floorY"] == 1.0
 
 
 def test_top_boundary_graph_infers_attic_for_flat_cap_under_slope_without_upper_void_context() -> None:
@@ -409,7 +676,7 @@ def test_top_boundary_graph_infers_attic_for_flat_cap_under_slope_without_upper_
     )
 
     top_boundary = build_top_boundary_graph(
-        exposed_rooms=exposed_rooms,
+        room_records=exposed_rooms,
         room_partitions=room_partitions,
         building_part_graph=building_part_graph,
         roof_coverage_graph=roof_coverage_graph,
@@ -498,7 +765,7 @@ def test_top_boundary_graph_infers_upper_void_from_evidence_without_exact_cell()
     )
 
     top_boundary = build_top_boundary_graph(
-        exposed_rooms=exposed_rooms,
+        room_records=exposed_rooms,
         room_partitions=room_partitions,
         building_part_graph=building_part_graph,
         roof_coverage_graph=roof_coverage_graph,
@@ -577,7 +844,7 @@ def test_top_boundary_graph_infers_attic_from_gable_evidence_without_exact_cell(
     )
 
     top_boundary = build_top_boundary_graph(
-        exposed_rooms=exposed_rooms,
+        room_records=exposed_rooms,
         room_partitions=room_partitions,
         building_part_graph=building_part_graph,
         roof_coverage_graph=roof_coverage_graph,

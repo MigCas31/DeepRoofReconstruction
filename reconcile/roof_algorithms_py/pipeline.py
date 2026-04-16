@@ -5,7 +5,11 @@ from .boundary_model import (
     derive_roof_surfaces_from_boundary_model,
 )
 from .ceiling_plane_clipping import clip_ceiling_planes
-from .ceiling_plane_generation import build_ceiling_planes, collect_exposed_rooms
+from .ceiling_plane_generation import (
+    build_ceiling_planes,
+    collect_exposed_rooms,
+    collect_room_top_boundary_records,
+)
 from .flat_surface_generation import build_flat_roof_surfaces
 from .footprint_derivation import build_building_footprint
 from .math_utils import point_in_poly_2d, point_in_poly_xz
@@ -18,6 +22,7 @@ from .roof_building_parts import (
     refine_building_part_graph,
 )
 from .roof_cell_complex import build_roof_cell_complex
+from .roof_cell_complex import filter_knee_walls_by_occupied_shell
 from .roof_coverage_graph import build_roof_coverage_graph
 from .roof_envelope_continuation import continue_roof_envelopes
 from .roof_evidence_graph import (
@@ -29,7 +34,7 @@ from .roof_hypothesis_graph import (
     build_roof_hypothesis_graph,
     select_roof_surfaces_from_hypotheses,
 )
-from .roof_partitioning import derive_room_ceiling_partitions
+from .roof_partitioning import derive_room_ceiling_partitions, inject_simple_slant_partitions
 from .segment_collection import collect_oblique_segments
 from .simple_slant import identify_simple_slant_rooms
 from .steps import ROOF_PIPELINE_STEPS
@@ -78,6 +83,11 @@ def run_roof_algorithms(bldg: dict, graph=None) -> dict:
         bldg,
         story_index["has_floor_above"],
         exclude_room_indices=exclude_rooms,
+        graph=graph,
+    )
+    top_boundary_rooms = collect_room_top_boundary_records(
+        bldg,
+        story_index["has_floor_above"],
         graph=graph,
     )
     ceiling_planes = build_ceiling_planes(valid_clusters, bldg=bldg, graph=graph)
@@ -172,10 +182,15 @@ def run_roof_algorithms(bldg: dict, graph=None) -> dict:
     roof_graph = build_roof_boundary_graph(boundary_model, graph=graph)
     working_hypothesis_graph = roof_hypothesis_graph
     ceiling_partitions = derive_room_ceiling_partitions(
-        exposed_rooms=exposed_rooms,
+        room_records=top_boundary_rooms,
         oblique_roof_surfaces=derived_roof_surfaces["oblique"],
         flat_roof_surfaces=ceiling_flat_support_surfaces,
         hypothesis_graph=working_hypothesis_graph,
+    )
+    ceiling_partitions = inject_simple_slant_partitions(
+        partitions=ceiling_partitions,
+        simple_slant_ceilings=simple_slant["simple_slant_ceilings"],
+        room_records=top_boundary_rooms,
     )
     roof_coverage_graph = build_roof_coverage_graph(
         room_partitions=ceiling_partitions["room_partitions"],
@@ -192,31 +207,15 @@ def run_roof_algorithms(bldg: dict, graph=None) -> dict:
         roof_coverage_graph=roof_coverage_graph,
     )
     if continuation["continued_surfaces"]:
+        # Continuation remains a graph/diagnostic inference until it is backed by
+        # explicit arrangement faces. Do not feed polygon-lifted continuation
+        # patches back into the committed roof surface set.
         working_hypothesis_graph = continuation["hypothesis_graph"]
-        boundary_model = build_boundary_face_model(
-            bldg=bldg,
-            roof_result={
-                "roof_surfaces": {
-                    "oblique": continuation["selected_oblique_surfaces"],
-                    "flat": roof_flat_surfaces,
-                }
-            },
-            graph=graph,
-        )
-        derived_roof_surfaces = derive_roof_surfaces_from_boundary_model(boundary_model)
-        roof_graph = build_roof_boundary_graph(boundary_model, graph=graph)
-        ceiling_partitions = derive_room_ceiling_partitions(
-            exposed_rooms=exposed_rooms,
-            oblique_roof_surfaces=derived_roof_surfaces["oblique"],
-            flat_roof_surfaces=ceiling_flat_support_surfaces,
-            hypothesis_graph=working_hypothesis_graph,
-        )
-        roof_coverage_graph = build_roof_coverage_graph(
-            room_partitions=ceiling_partitions["room_partitions"],
-            selected_oblique_surfaces=derived_roof_surfaces["oblique"],
-            selected_flat_surfaces=derived_roof_surfaces["flat"],
-            building_part_graph=building_part_graph,
-        )
+    occupied_room_cell_complex = build_occupied_room_cell_complex(
+        bldg=bldg,
+        room_partitions=ceiling_partitions["room_partitions"],
+        building_part_graph=building_part_graph,
+    )
     roof_cell_complex = build_roof_cell_complex(
         room_partitions=ceiling_partitions["room_partitions"],
         selected_oblique_surfaces=derived_roof_surfaces["oblique"],
@@ -224,10 +223,9 @@ def run_roof_algorithms(bldg: dict, graph=None) -> dict:
         building_part_graph=building_part_graph,
         roof_coverage_graph=roof_coverage_graph,
     )
-    occupied_room_cell_complex = build_occupied_room_cell_complex(
-        bldg=bldg,
-        room_partitions=ceiling_partitions["room_partitions"],
-        building_part_graph=building_part_graph,
+    roof_cell_complex = filter_knee_walls_by_occupied_shell(
+        roof_cell_complex=roof_cell_complex,
+        occupied_room_cell_complex=occupied_room_cell_complex,
     )
     roof_evidence_graph = build_roof_evidence_graph(
         exposed_rooms=exposed_rooms,
@@ -246,7 +244,7 @@ def run_roof_algorithms(bldg: dict, graph=None) -> dict:
         roof_evidence_graph=roof_evidence_graph,
     )
     top_boundary_graph = build_top_boundary_graph(
-        exposed_rooms=exposed_rooms,
+        room_records=top_boundary_rooms,
         room_partitions=ceiling_partitions["room_partitions"],
         building_part_graph=building_part_graph,
         roof_coverage_graph=roof_coverage_graph,
@@ -323,6 +321,7 @@ def run_roof_algorithms(bldg: dict, graph=None) -> dict:
         "occupied_room_cell_complex": occupied_room_cell_complex,
         "roof_evidence_graph": roof_evidence_graph,
         "top_boundary_graph": top_boundary_graph,
+        "roof_continuation_diagnostics": continuation,
         "ceiling_partitions": ceiling_partitions,
         "ceiling": {
             "exposed_rooms": exposed_rooms,
@@ -337,6 +336,7 @@ def run_roof_algorithms(bldg: dict, graph=None) -> dict:
             "cell_complex": roof_cell_complex,
             "occupied_room_cell_complex": occupied_room_cell_complex,
             "top_boundary_graph": top_boundary_graph,
+            "continuation_diagnostics": continuation,
             "thermal": thermal_ceilings,
         },
         "knee_walls": roof_cell_complex.get("knee_walls") or [],

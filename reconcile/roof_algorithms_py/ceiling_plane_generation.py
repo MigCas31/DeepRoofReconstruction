@@ -77,12 +77,23 @@ def _cap_wall_top_for_half_level(
     return wall_top_y
 
 
-def collect_exposed_rooms(
+def _collect_room_records(
     bldg: dict,
     has_floor_above,
     exclude_room_indices: set[int] | None = None,
     graph=None,
+    *,
+    include_non_exposed: bool = False,
 ) -> list:
+    def _room_floor_polygon(room: dict) -> list | None:
+        fp = room.get("floor_polygon")
+        if isinstance(fp, list) and len(fp) >= 3:
+            return fp
+        original = room.get("floor_polygon_original")
+        if isinstance(original, list) and len(original) >= 3:
+            return original
+        return None
+
     graph_room_footprints: dict[str, list[list[float]]] = {}
     cell_complex = ((getattr(graph, "geometry_index", None) or {}).get("cell_complex") or {}) if graph is not None else {}
     for cell in (cell_complex.get("cells") or []):
@@ -101,7 +112,7 @@ def collect_exposed_rooms(
     for room_idx, room in enumerate(bldg.get("rooms", [])):
         if exclude_room_indices and room_idx in exclude_room_indices:
             continue
-        fp = room.get("floor_polygon")
+        fp = _room_floor_polygon(room)
         if not fp or len(fp) < 3:
             continue
         walls = room.get("walls_computed") or []
@@ -112,9 +123,12 @@ def collect_exposed_rooms(
         fcz = sum(p[2] for p in fp) / len(fp)
         story = int(room.get("story", 0))
         graph_room, roof_decision = classify_graph_roof_room(graph, story, fp)
+        is_roof_candidate = True
         if roof_decision is not None and not graph_allows_roof_candidate(roof_decision):
-            continue
+            is_roof_candidate = False
         if graph_requires_geometry_fallback(roof_decision) and has_floor_above(fcx, fcz, story):
+            is_roof_candidate = False
+        if not include_non_exposed and not is_roof_candidate:
             continue
 
         wall_top_ys = [
@@ -150,9 +164,45 @@ def collect_exposed_rooms(
                 "wallTopMin": capped_min,
                 "wallTopYs": sorted(capped_ys),
                 "story": story,
+                "roof_decision": roof_decision,
+                "is_roof_candidate": is_roof_candidate,
+                "top_boundary_mode": (roof_decision or {}).get("mode", "roof_candidate" if is_roof_candidate else "ceiling_below_occupied_volume"),
+                "top_boundary_reason": (roof_decision or {}).get("reason"),
+                "above_state": (roof_decision or {}).get("above_state"),
+                "exposure_state": (roof_decision or {}).get("exposure_state"),
             }
         )
     return out
+
+
+def collect_exposed_rooms(
+    bldg: dict,
+    has_floor_above,
+    exclude_room_indices: set[int] | None = None,
+    graph=None,
+) -> list:
+    return _collect_room_records(
+        bldg,
+        has_floor_above,
+        exclude_room_indices=exclude_room_indices,
+        graph=graph,
+        include_non_exposed=False,
+    )
+
+
+def collect_room_top_boundary_records(
+    bldg: dict,
+    has_floor_above,
+    exclude_room_indices: set[int] | None = None,
+    graph=None,
+) -> list:
+    return _collect_room_records(
+        bldg,
+        has_floor_above,
+        exclude_room_indices=exclude_room_indices,
+        graph=graph,
+        include_non_exposed=True,
+    )
 
 
 def _expand_plane_room_indices(

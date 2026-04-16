@@ -63,6 +63,16 @@ function unresolvedStyle(region) {
   };
 }
 
+function continuationDiagnosticStyle(region, selectedPartId) {
+  const selected = selectedPartId && (region?.effective_part_ids || []).includes(selectedPartId);
+  const exact = Number(region?.exact_incidence_pair_count || 0) > 0;
+  return {
+    color: exact ? 0x22d3ee : 0x38bdf8,
+    opacity: selected ? (exact ? 0.34 : 0.28) : (exact ? 0.2 : 0.14),
+    edgeOpacity: selected ? 0.9 : 0.55,
+  };
+}
+
 function shouldRenderSemanticAtom(atom) {
   const role = String(atom?.role || '');
   if (!role || role === 'flat_ceiling') return false;
@@ -268,6 +278,51 @@ export function renderOntologySemantics({
     semanticAtomCount: atoms.length,
     unresolvedRegionCount: unresolvedRegions.length,
     dormerCount: dormers.length,
+  };
+}
+
+export function renderOntologyContinuationDiagnostics({
+  ontologySummary,
+  selectedPartId = null,
+  groups,
+  createPolygonMesh,
+  createEdgeLoop,
+  attachLocator,
+  buildingUuid,
+}) {
+  const continuationRegions = Array.isArray(ontologySummary?.roof_continuation_diagnostics)
+    ? ontologySummary.roof_continuation_diagnostics
+    : [];
+  let continuationRegionCount = 0;
+
+  for (const region of continuationRegions) {
+    const style = continuationDiagnosticStyle(region, selectedPartId);
+    addFace({
+      face: { corners: region?.polygon },
+      color: style.color,
+      opacity: style.opacity,
+      edgeOpacity: style.edgeOpacity,
+      group: groups.ontologyContinuation,
+      createPolygonMesh,
+      createEdgeLoop,
+      attachLocator,
+      locator: {
+        buildingUuid,
+        kind: 'ontology-roof-continuation',
+        id: String(region?.id || 'continuation-region'),
+        corners: region?.polygon,
+        partIds: region?.effective_part_ids || [],
+        partId: (region?.effective_part_ids || [])[0] || null,
+        roofHypothesisId: region?.roof_hypothesis_id,
+        roomId: region?.room_id,
+      },
+      renderOrder: 57,
+    });
+    continuationRegionCount += 1;
+  }
+
+  return {
+    continuationRegionCount,
   };
 }
 

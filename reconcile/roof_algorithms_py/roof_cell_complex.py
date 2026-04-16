@@ -18,6 +18,8 @@ LATTICE_SCALE_MM = 1000
 MIN_UPPER_VOID_HEIGHT_M = 0.12
 MIN_KNEE_WALL_AREA_M2 = 0.1
 MIN_KNEE_WALL_BASE_EDGE_M = 0.15
+KNEE_WALL_OCCUPIED_SHELL_MAX_DIST_M = 0.08
+KNEE_WALL_OCCUPIED_SHELL_MAX_BOTTOM_DELTA_M = 0.35
 
 
 def _snap(value: float) -> float:
@@ -370,6 +372,134 @@ def _derive_knee_walls(
             }
         )
     return knee_walls
+
+
+def _extreme_edge(corners: list[list[float]], *, mode: str) -> tuple[LineString | None, float | None]:
+    if mode not in {"top", "bottom"}:
+        return None, None
+    if len(corners) < 2:
+        return None, None
+    ordered = sorted(
+        (
+            [float(point[0]), float(point[1]), float(point[2])]
+            for point in corners
+            if isinstance(point, (list, tuple)) and len(point) >= 3
+        ),
+        key=lambda point: point[1],
+    )
+    if len(ordered) < 2:
+        return None, None
+    points = ordered[:2] if mode == "bottom" else ordered[-2:]
+    edge = LineString([(points[0][0], points[0][2]), (points[1][0], points[1][2])])
+    if edge.length <= EPS:
+        return None, None
+    return edge, _snap((points[0][1] + points[1][1]) * 0.5)
+
+
+def _line_angle_deg(left: LineString, right: LineString) -> float:
+    left_coords = list(left.coords)
+    right_coords = list(right.coords)
+    if len(left_coords) < 2 or len(right_coords) < 2:
+        return 180.0
+    lx = float(left_coords[1][0] - left_coords[0][0])
+    lz = float(left_coords[1][1] - left_coords[0][1])
+    rx = float(right_coords[1][0] - right_coords[0][0])
+    rz = float(right_coords[1][1] - right_coords[0][1])
+    left_len = math.sqrt(lx * lx + lz * lz)
+    right_len = math.sqrt(rx * rx + rz * rz)
+    if left_len <= EPS or right_len <= EPS:
+        return 180.0
+    dot = max(-1.0, min(1.0, (lx * rx + lz * rz) / (left_len * right_len)))
+    return math.degrees(math.acos(abs(dot)))
+
+
+def filter_knee_walls_by_occupied_shell(
+    *,
+    roof_cell_complex: dict[str, Any],
+    occupied_room_cell_complex: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not roof_cell_complex:
+        return roof_cell_complex
+    knee_walls = [wall for wall in (roof_cell_complex.get("knee_walls") or []) if isinstance(wall, dict)]
+    if not knee_walls or not occupied_room_cell_complex:
+        return roof_cell_complex
+
+    supports_by_room: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for cell in (occupied_room_cell_complex.get("cells") or []):
+        if not isinstance(cell, dict):
+            continue
+        room_index = cell.get("room_index")
+        if not isinstance(room_index, int):
+            continue
+        for face in (cell.get("faces") or []):
+            if not isinstance(face, dict):
+                continue
+            metadata = face.get("metadata") or {}
+            if str(metadata.get("boundary_class") or "") != "exterior_wall":
+                continue
+            top_edge, top_y = _extreme_edge(face.get("corners") or [], mode="top")
+            if top_edge is None or top_y is None:
+                continue
+            supports_by_room[room_index].append(
+                {
+                    "edge": top_edge,
+                    "top_y_m": float(top_y),
+                    "cell_id": cell.get("id"),
+                    "face_id": face.get("id"),
+                }
+            )
+
+    kept: list[dict[str, Any]] = []
+    dropped_count = 0
+    for wall in knee_walls:
+        room_index = wall.get("room_index")
+        if not isinstance(room_index, int):
+            dropped_count += 1
+            continue
+        bottom_edge, bottom_y = _extreme_edge(wall.get("corners") or [], mode="bottom")
+        if bottom_edge is None or bottom_y is None:
+            dropped_count += 1
+            continue
+        base_edge_m = float(wall.get("base_edge_m", 0.0) or 0.0)
+        min_supported_length = max(0.15, min(1.0, base_edge_m * 0.25))
+        best_support: dict[str, Any] | None = None
+        for support in supports_by_room.get(room_index, []):
+            support_edge = support["edge"]
+            if _line_angle_deg(bottom_edge, support_edge) > 12.0:
+                continue
+            if abs(float(bottom_y) - float(support["top_y_m"])) > KNEE_WALL_OCCUPIED_SHELL_MAX_BOTTOM_DELTA_M:
+                continue
+            distance = float(bottom_edge.distance(support_edge))
+            if distance > KNEE_WALL_OCCUPIED_SHELL_MAX_DIST_M:
+                continue
+            supported_length = float(
+                bottom_edge.intersection(
+                    support_edge.buffer(KNEE_WALL_OCCUPIED_SHELL_MAX_DIST_M, cap_style=2)
+                ).length
+            )
+            if best_support is None or supported_length > float(best_support["supported_length_m"]) + EPS:
+                best_support = {
+                    "supported_length_m": round(supported_length, 6),
+                    "distance_m": round(distance, 6),
+                    "occupied_top_y_m": round(float(support["top_y_m"]), 6),
+                    "occupied_cell_id": support.get("cell_id"),
+                    "occupied_face_id": support.get("face_id"),
+                }
+        if best_support is None or float(best_support["supported_length_m"]) + EPS < min_supported_length:
+            dropped_count += 1
+            continue
+        enriched = dict(wall)
+        enriched["occupied_shell_support"] = best_support
+        kept.append(enriched)
+
+    metadata = dict(roof_cell_complex.get("metadata") or {})
+    metadata["knee_wall_count"] = len(kept)
+    metadata["knee_wall_dropped_by_occupied_shell"] = dropped_count
+    return {
+        **roof_cell_complex,
+        "knee_walls": kept,
+        "metadata": metadata,
+    }
 
 
 def build_roof_cell_complex(

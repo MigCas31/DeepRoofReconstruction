@@ -19,6 +19,8 @@ from .math_utils import plane_normal, plane_y_at
 EPS = 1e-6
 AREA_EPS = 0.01
 LATTICE_SCALE_MM = 1000
+ROOM_TOP_MIN_CLEARANCE_M = 0.15
+ROOM_TOP_SHELL_TOL_M = 0.08
 
 
 def _snap(value: float) -> float:
@@ -39,8 +41,25 @@ def _poly_xz(corners: list) -> Polygon | None:
             poly = make_valid(poly)
             if poly.geom_type == "MultiPolygon":
                 poly = max(poly.geoms, key=lambda geom: geom.area)
+            elif poly.geom_type == "GeometryCollection":
+                polys = [
+                    geom
+                    for geom in poly.geoms
+                    if isinstance(geom, Polygon) and not geom.is_empty and geom.area > AREA_EPS
+                ]
+                if polys:
+                    poly = max(polys, key=lambda geom: geom.area)
+                else:
+                    poly = None
         except Exception:
             return None
+    if poly is None or not isinstance(poly, Polygon) or poly.is_empty or poly.area <= AREA_EPS:
+        try:
+            hull = Polygon(points).convex_hull
+        except Exception:
+            hull = None
+        if isinstance(hull, Polygon) and not hull.is_empty and hull.area > AREA_EPS:
+            poly = hull
     if not isinstance(poly, Polygon) or poly.is_empty or poly.area <= AREA_EPS:
         return None
     return poly
@@ -109,11 +128,81 @@ def _flat_y(surface: dict[str, Any], room_data: dict[str, Any]) -> float:
     y = surface.get("y")
     if isinstance(y, (float, int)):
         return float(y)
+    implicit_top_y = room_data.get("implicit_top_y")
+    if isinstance(implicit_top_y, (float, int)):
+        return float(implicit_top_y)
     corners = surface.get("corners") or []
     ys = [float(c[1]) for c in corners if isinstance(c, (list, tuple)) and len(c) >= 3]
     if ys:
         return sum(ys) / len(ys)
     return (float(room_data["wallTopY"]) + float(room_data["wallTopMin"])) * 0.5
+
+
+def _median(values: list[float]) -> float | None:
+    ordered = sorted(float(value) for value in values if isinstance(value, (float, int)))
+    if not ordered:
+        return None
+    mid = len(ordered) // 2
+    if len(ordered) % 2 == 1:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) * 0.5
+
+
+def _room_min_valid_top_y(room_data: dict[str, Any]) -> float:
+    floor_y = float(room_data.get("floorY", 0.0))
+    wall_top_min = float(room_data.get("wallTopMin", floor_y))
+    return _snap(max(floor_y + ROOM_TOP_MIN_CLEARANCE_M, wall_top_min - ROOM_TOP_SHELL_TOL_M))
+
+
+def _implicit_flat_y(room_data: dict[str, Any]) -> float:
+    median_top = _median(list(room_data.get("wallTopYs") or []))
+    if median_top is not None:
+        return _snap(max(float(median_top), _room_min_valid_top_y(room_data)))
+    return _snap(
+        max(
+            (float(room_data["wallTopY"]) + float(room_data["wallTopMin"])) * 0.5,
+            _room_min_valid_top_y(room_data),
+        )
+    )
+
+
+def _flat_surface_is_valid_for_room(surface: dict[str, Any], room_data: dict[str, Any]) -> bool:
+    return _flat_y(surface, room_data) >= _room_min_valid_top_y(room_data) - EPS
+
+
+def _build_implicit_flat_atom(
+    *,
+    room_key: str,
+    room_index: int,
+    story: int,
+    atom: Polygon,
+    room_data: dict[str, Any],
+    supporting_hypothesis_ids: list[str] | None = None,
+) -> dict[str, Any] | None:
+    top_boundary_mode = str(room_data.get("top_boundary_mode") or "")
+    if top_boundary_mode == "ceiling_below_occupied_volume":
+        flat_role_reason = "explicit_upper_occupancy_shell_cap"
+    else:
+        flat_role_reason = "room_shell_top_fallback"
+    corners = _atom_corners(atom, "flat", None, {**room_data, "implicit_top_y": _implicit_flat_y(room_data)})
+    if len(corners) < 3:
+        return None
+    atom_id = f"ceiling-partition:{_stable_hash([room_key, 'implicit-flat', str(corners)], 20)}"
+    return {
+        "id": atom_id,
+        "room_index": room_index,
+        "story": story,
+        "kind": "flat",
+        "roof_hypothesis_id": None,
+        "poly": corners,
+        "area_m2": round(float(atom.area), 6),
+        "supporting_roof_hypothesis_ids": sorted(set(str(value) for value in (supporting_hypothesis_ids or []) if value)),
+        "flat_role": "implicit_room_shell_cap",
+        "flat_role_reason": flat_role_reason,
+        "top_y_m": _implicit_flat_y(room_data),
+        "top_boundary_mode": top_boundary_mode or "roof_candidate",
+        "top_boundary_reason": room_data.get("top_boundary_reason"),
+    }
 
 
 def _surface_plane_from_corners(surface: dict[str, Any]) -> dict[str, Any] | None:
@@ -257,9 +346,16 @@ def _atom_corners(atom: Polygon, kind: str, surface: dict[str, Any] | None, room
     return [(_snap(float(x)), y, _snap(float(z))) for x, z, *_ in coords]
 
 
+def _room_outline_corners(poly: Polygon, floor_y: float) -> list[list[float]]:
+    coords = list(poly.exterior.coords)
+    if coords and coords[-1] == coords[0]:
+        coords = coords[:-1]
+    return [[_snap(float(x)), _snap(float(floor_y)), _snap(float(z))] for x, z, *_ in coords]
+
+
 def derive_room_ceiling_partitions(
     *,
-    exposed_rooms: list[dict[str, Any]],
+    room_records: list[dict[str, Any]],
     oblique_roof_surfaces: list[dict[str, Any]],
     flat_roof_surfaces: list[dict[str, Any]],
     hypothesis_graph: dict[str, Any],
@@ -297,8 +393,10 @@ def derive_room_ceiling_partitions(
         )
     }
     split_line_count = 0
+    rejected_flat_candidate_count = 0
+    implicit_partition_count = 0
 
-    for room_data in exposed_rooms:
+    for room_data in room_records:
         room_index = int(room_data["room_index"])
         room_key = f"room:{room_index}"
         room_polygon, room_corners = _room_polygon_with_fallback(room_data)
@@ -317,6 +415,9 @@ def derive_room_ceiling_partitions(
             node = nodes_by_id.get(hypothesis_id) or {}
             edge = cover_edges.get((hypothesis_id, room_key)) or {}
             for surface_index, surface in enumerate(surfaces):
+                if str(node.get("surface_kind", "flat")) == "flat" and not _flat_surface_is_valid_for_room(surface, room_data):
+                    rejected_flat_candidate_count += 1
+                    continue
                 surface_poly = _poly_xz(surface.get("corners") or [])
                 if surface_poly is None:
                     continue
@@ -428,11 +529,22 @@ def derive_room_ceiling_partitions(
                 "poly": corners,
                 "area_m2": round(float(atom.area), 6),
                 "supporting_roof_hypothesis_ids": sorted(set(supporting_hypothesis_ids)),
+                "top_boundary_mode": room_data.get("top_boundary_mode"),
+                "top_boundary_reason": room_data.get("top_boundary_reason"),
             }
             if isinstance(owner_surface, dict):
                 if "flat_role" in owner_surface:
                     atom_record["flat_role"] = owner_surface.get("flat_role")
                     atom_record["flat_role_reason"] = owner_surface.get("flat_role_reason")
+            elif owner_kind == "flat":
+                top_boundary_mode = str(room_data.get("top_boundary_mode") or "")
+                atom_record["flat_role"] = "implicit_room_shell_cap"
+                atom_record["flat_role_reason"] = (
+                    "explicit_upper_occupancy_shell_cap"
+                    if top_boundary_mode == "ceiling_below_occupied_volume"
+                    else "room_shell_top_fallback"
+                )
+                atom_record["top_y_m"] = _implicit_flat_y(room_data)
             if owner_top_y is not None:
                 atom_record["top_y_m"] = owner_top_y
             atoms.append(atom_record)
@@ -441,29 +553,64 @@ def derive_room_ceiling_partitions(
             else:
                 flat_surfaces.append(atom_record)
 
+        atom_polys = [_poly_xz(atom_record.get("poly") or []) for atom_record in atoms]
+        atom_polys = [poly for poly in atom_polys if poly is not None and poly.area > AREA_EPS]
+        if atom_polys:
+            try:
+                uncovered = room_polygon.difference(unary_union(atom_polys))
+            except Exception:
+                uncovered = None
+            for uncovered_poly in _decompose_polys(uncovered):
+                if uncovered_poly.is_empty or uncovered_poly.area <= AREA_EPS:
+                    continue
+                supporting_hypothesis_ids: list[str] = []
+                rep = uncovered_poly.representative_point()
+                for candidate in candidate_records:
+                    try:
+                        overlap_area = uncovered_poly.intersection(candidate["room_overlap"]).area
+                    except Exception:
+                        overlap_area = 0.0
+                    if overlap_area <= AREA_EPS:
+                        continue
+                    if candidate["kind"] == "oblique":
+                        supporting_hypothesis_ids.append(str(candidate["hypothesis_id"]))
+                        continue
+                    top_y = _height_at(candidate["height_model"], float(rep.x), float(rep.y))
+                    if top_y >= _room_min_valid_top_y(room_data) - EPS:
+                        supporting_hypothesis_ids.append(str(candidate["hypothesis_id"]))
+                implicit_atom = _build_implicit_flat_atom(
+                    room_key=room_key,
+                    room_index=room_index,
+                    story=int(room_data["story"]),
+                    atom=uncovered_poly,
+                    room_data=room_data,
+                    supporting_hypothesis_ids=supporting_hypothesis_ids,
+                )
+                if implicit_atom is None:
+                    continue
+                atoms.append(implicit_atom)
+                flat_surfaces.append(implicit_atom)
+                implicit_partition_count += 1
+
         if not atoms:
-            fallback_poly = [
-                (_snap(float(p[0])), _snap((float(room_data["wallTopY"]) + float(room_data["wallTopMin"])) * 0.5), _snap(float(p[2])))
-                for p in room_corners
-            ]
-            if len(fallback_poly) >= 3:
-                atom_record = {
-                    "id": f"ceiling-partition:{_stable_hash([room_key, 'fallback-flat', str(fallback_poly)], 20)}",
-                    "room_index": room_index,
-                    "story": int(room_data["story"]),
-                    "kind": "flat",
-                    "roof_hypothesis_id": None,
-                    "poly": fallback_poly,
-                    "area_m2": round(float(room_polygon.area), 6),
-                }
-                atoms.append(atom_record)
-                flat_surfaces.append(atom_record)
+            implicit_atom = _build_implicit_flat_atom(
+                room_key=room_key,
+                room_index=room_index,
+                story=int(room_data["story"]),
+                atom=room_polygon,
+                room_data=room_data,
+            )
+            if implicit_atom is not None:
+                atoms.append(implicit_atom)
+                flat_surfaces.append(implicit_atom)
+                implicit_partition_count += 1
 
         room_partitions.append(
             {
                 "room_index": room_index,
                 "story": int(room_data["story"]),
                 "graph_room_id": room_data.get("graph_room_id"),
+                "room_outline": _room_outline_corners(room_polygon, float(room_data.get("floorY", 0.0))),
                 "partition_count": len(atoms),
                 "mixed": len({atom["kind"] for atom in atoms}) > 1 or len({atom["roof_hypothesis_id"] for atom in atoms if atom["roof_hypothesis_id"]}) > 1,
                 "partitions": atoms,
@@ -480,5 +627,93 @@ def derive_room_ceiling_partitions(
             "oblique_partition_count": len(oblique_surfaces),
             "mixed_room_count": sum(1 for room in room_partitions if room["mixed"]),
             "split_line_count": split_line_count,
+            "rejected_flat_candidate_count": rejected_flat_candidate_count,
+            "implicit_partition_count": implicit_partition_count,
         },
+    }
+
+
+def inject_simple_slant_partitions(
+    *,
+    partitions: dict[str, Any],
+    simple_slant_ceilings: list[dict[str, Any]],
+    room_records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not simple_slant_ceilings:
+        return partitions
+
+    room_data_by_index = {
+        int(room_data["room_index"]): room_data
+        for room_data in room_records
+        if isinstance(room_data, dict) and isinstance(room_data.get("room_index"), int)
+    }
+    room_partitions = list(partitions.get("room_partitions") or [])
+    room_partition_by_index = {
+        int(room_partition["room_index"]): room_partition
+        for room_partition in room_partitions
+        if isinstance(room_partition, dict) and isinstance(room_partition.get("room_index"), int)
+    }
+    flat_surfaces = list(partitions.get("flat") or [])
+    oblique_surfaces = list(partitions.get("oblique") or [])
+    metadata = dict(partitions.get("metadata") or {})
+    injected_count = 0
+
+    for ceiling in simple_slant_ceilings:
+        if not isinstance(ceiling, dict):
+            continue
+        room_index = ceiling.get("room_index")
+        if not isinstance(room_index, int):
+            continue
+        existing = room_partition_by_index.get(room_index)
+        if existing is not None and int(existing.get("partition_count", 0) or 0) > 0:
+            continue
+        room_data = room_data_by_index.get(room_index)
+        poly = [
+            [float(point[0]), float(point[1]), float(point[2])]
+            for point in (ceiling.get("poly") or [])
+            if isinstance(point, (list, tuple)) and len(point) >= 3
+        ]
+        poly_xz = _poly_xz(poly)
+        if room_data is None or poly_xz is None or len(poly) < 3:
+            continue
+        partition = {
+            "id": f"ceiling-partition:{_stable_hash([f'room:{room_index}', 'simple-slant', str(poly)], 20)}",
+            "room_index": room_index,
+            "story": int(room_data.get("story", ceiling.get("story", 0)) or 0),
+            "kind": "oblique",
+            "roof_hypothesis_id": None,
+            "poly": poly,
+            "area_m2": round(float(poly_xz.area), 6),
+            "supporting_roof_hypothesis_ids": [],
+            "top_boundary_mode": room_data.get("top_boundary_mode"),
+            "top_boundary_reason": room_data.get("top_boundary_reason") or "simple_slant_ceiling_polygon",
+        }
+        room_partition = {
+            "room_index": room_index,
+            "story": int(room_data.get("story", ceiling.get("story", 0)) or 0),
+            "graph_room_id": room_data.get("graph_room_id"),
+            "room_outline": _room_outline_corners(poly_xz, float(room_data.get("floorY", 0.0))),
+            "partition_count": 1,
+            "mixed": False,
+            "partitions": [partition],
+        }
+        room_partition_by_index[room_index] = room_partition
+        room_partitions.append(room_partition)
+        oblique_surfaces.append(partition)
+        injected_count += 1
+
+    if injected_count <= 0:
+        return partitions
+
+    metadata["room_partition_count"] = len(room_partitions)
+    metadata["oblique_partition_count"] = len(oblique_surfaces)
+    metadata["flat_partition_count"] = len(flat_surfaces)
+    metadata["mixed_room_count"] = sum(1 for room in room_partitions if room["mixed"])
+    metadata["simple_slant_partition_count"] = injected_count
+
+    return {
+        "room_partitions": room_partitions,
+        "flat": flat_surfaces,
+        "oblique": oblique_surfaces,
+        "metadata": metadata,
     }

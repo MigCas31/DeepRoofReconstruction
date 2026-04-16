@@ -9,7 +9,7 @@ from .graph_utils import stable_hash as _stable_hash
 
 def build_top_boundary_graph(
     *,
-    exposed_rooms: list[dict[str, Any]],
+    room_records: list[dict[str, Any]],
     room_partitions: list[dict[str, Any]],
     building_part_graph: dict[str, Any],
     roof_coverage_graph: dict[str, Any] | None = None,
@@ -18,7 +18,7 @@ def build_top_boundary_graph(
 ) -> dict[str, Any]:
     room_data_by_id = {
         _room_key(int(room["room_index"])): room
-        for room in exposed_rooms
+        for room in room_records
     }
     part_nodes = {
         node["id"]: node
@@ -59,6 +59,11 @@ def build_top_boundary_graph(
         room_part_ids = room_membership.get(room_id, [])
         part = part_nodes.get(room_part_ids[0]) if room_part_ids else None
         part_family = str((part or {}).get("roof_family_guess", "unknown"))
+        room_part_families = {
+            str((part_nodes.get(part_id) or {}).get("roof_family_guess", "unknown"))
+            for part_id in room_part_ids
+            if part_id in part_nodes
+        }
         room_evidence = evidence_by_room.get(room_id) or {}
         atom_roles: list[str] = []
         has_oblique_atom = any(partition.get("kind") == "oblique" for partition in room_partition.get("partitions") or [])
@@ -67,6 +72,7 @@ def build_top_boundary_graph(
             atom_id = str(partition["id"])
             kind = str(partition.get("kind", "flat"))
             flat_role = str(partition.get("flat_role") or "")
+            flat_role_reason = str(partition.get("flat_role_reason") or "")
             coverage = coverage_by_atom.get(atom_id) or {}
             atom_evidence = evidence_by_atom.get(atom_id) or {}
             sloped_state = str(coverage.get("sloped_state", "none"))
@@ -125,13 +131,48 @@ def build_top_boundary_graph(
                     else:
                         role = "flat_ceiling"
                         reason = "unsupported_flat_cap_retained_as_ceiling"
+                elif (
+                    flat_role == "roof_flat"
+                    and flat_role_reason == "selected_flat_hypothesis"
+                    and sloped_state not in {"confirmed", "partial"}
+                    and not has_oblique_atom
+                    and not bool(room_evidence.get("strong_attic_context"))
+                    and not bool(room_evidence.get("strong_upper_void_context"))
+                    and not bool(room_evidence.get("strong_perimeter_sloped"))
+                    and not bool(room_evidence.get("strong_knee_wall_signal"))
+                ):
+                    role = "flat_ceiling"
+                    reason = "selected_flat_hypothesis_without_sloped_context"
                 elif flat_role == "ambiguous_flat_over_sloped_part":
-                    if slant_delta >= 0.6 and not has_oblique_atom:
+                    if (
+                        sloped_state not in {"confirmed", "partial"}
+                        and not has_oblique_atom
+                        and not bool(room_evidence.get("strong_attic_context"))
+                        and not bool(room_evidence.get("strong_upper_void_context"))
+                        and not bool(room_evidence.get("strong_perimeter_sloped"))
+                        and not bool(room_evidence.get("strong_knee_wall_signal"))
+                        and not coverage_atom_subparts.get(atom_id)
+                        and not atom_evidence.get("sloped_context")
+                        and not atom_evidence.get("flat_cap_under_slope")
+                        and not cell_kinds
+                    ):
+                        role = "flat_ceiling"
+                        reason = "ambiguous_flat_without_local_sloped_support"
+                    elif slant_delta >= 0.6 and not has_oblique_atom:
                         role = "attic_floor_candidate"
                         reason = "flat_atom_in_sloped_part_without_local_oblique_atom"
                     else:
                         role = "flat_ceiling"
                         reason = "ambiguous_flat_atom_retained_as_ceiling"
+                elif (
+                    part_family == "gable_or_multi_slope"
+                    and slant_delta >= 0.6
+                    and not has_oblique_atom
+                    and bool(room_evidence.get("strong_upper_void_context"))
+                    and not bool(room_evidence.get("strong_attic_context"))
+                ):
+                    role = "flat_transition_cap_inferred"
+                    reason = "strong_upper_void_room_in_sloped_part"
                 elif part_family == "gable_or_multi_slope" and slant_delta >= 0.6 and not has_oblique_atom:
                     role = "attic_floor_candidate"
                     reason = "strong_slant_room_in_sloped_part"

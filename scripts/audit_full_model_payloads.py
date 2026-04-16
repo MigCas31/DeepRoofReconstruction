@@ -8,6 +8,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 
+from shapely.geometry import Polygon
+from shapely.ops import unary_union
+from shapely.validation import make_valid
+
 from reconcile.extract3d.builder import extract_building
 from reconcile.roof_algorithms_py import run_roof_algorithms
 from reconcile.viewer_server import (
@@ -240,41 +244,60 @@ def _area_metrics(summary: dict, part_payload: dict, roof: dict) -> dict[str, fl
     ]
     roof_surfaces = roof.get("roof_surfaces") or {}
     heuristic_ceiling = roof.get("ceiling") or {}
+    ontology_roof_surfaces = [
+        surface for surface in payload_surfaces if str(surface.get("category") or "") == "exterior_roof"
+    ]
+    unresolved_surfaces = [
+        surface for surface in payload_surfaces if str(surface.get("category") or "") == "unresolved_region"
+    ]
+    ontology_semantic_ceiling_surfaces = [
+        surface
+        for surface in summary_surfaces
+        if str(surface.get("category") or "") in {"room_ceiling_flat", "room_ceiling_sloped", "attic_floor"}
+    ]
+    ontology_shell_ceiling_surfaces = [
+        surface
+        for surface in payload_surfaces
+        if str(surface.get("category") or "") == "base_room_ceiling"
+    ]
+    heuristic_roof_surfaces = [
+        surface
+        for key in ("flat", "oblique")
+        for surface in (roof_surfaces.get(key) or [])
+        if isinstance(surface, dict)
+    ]
+    heuristic_ceiling_surfaces = [
+        surface
+        for key in ("flat", "oblique", "simple_slant")
+        for surface in (heuristic_ceiling.get(key) or [])
+        if isinstance(surface, dict)
+    ]
 
     ontology_roof_area = _total_surface_area(
-        [surface for surface in payload_surfaces if str(surface.get("category") or "") == "exterior_roof"]
+        ontology_roof_surfaces
     )
     unresolved_area = _total_surface_area(
-        [surface for surface in payload_surfaces if str(surface.get("category") or "") == "unresolved_region"]
+        unresolved_surfaces
     )
-    heuristic_roof_area = _total_surface_area(
-        [
-            surface
-            for key in ("flat", "oblique")
-            for surface in (roof_surfaces.get(key) or [])
-            if isinstance(surface, dict)
-        ]
-    )
-    ontology_ceiling_area = _total_surface_area(
-        [
-            surface
-            for surface in summary_surfaces
-            if str(surface.get("category") or "") in {"room_ceiling_flat", "room_ceiling_sloped", "attic_floor"}
-        ]
-    )
-    heuristic_ceiling_area = _total_surface_area(
-        [
-            surface
-            for key in ("flat", "oblique", "simple_slant")
-            for surface in (heuristic_ceiling.get(key) or [])
-            if isinstance(surface, dict)
-        ]
-    )
+    heuristic_roof_area = _total_surface_area(heuristic_roof_surfaces)
+    ontology_ceiling_area = _total_surface_area(ontology_semantic_ceiling_surfaces)
+    ontology_shell_ceiling_area = _total_surface_area(ontology_shell_ceiling_surfaces)
+    heuristic_ceiling_area = _total_surface_area(heuristic_ceiling_surfaces)
 
     def _ratio(numerator: float, denominator: float) -> float | None:
         if denominator <= 1e-6:
             return None
         return round(numerator / denominator, 6)
+
+    roof_overlap = _union_projected_area_and_overlap(ontology_roof_surfaces, heuristic_roof_surfaces)
+    semantic_ceiling_overlap = _union_projected_area_and_overlap(
+        ontology_semantic_ceiling_surfaces,
+        heuristic_ceiling_surfaces,
+    )
+    shell_ceiling_overlap = _union_projected_area_and_overlap(
+        ontology_shell_ceiling_surfaces,
+        heuristic_ceiling_surfaces,
+    )
 
     return {
         "ontology_roof_area_m2": ontology_roof_area,
@@ -283,9 +306,76 @@ def _area_metrics(summary: dict, part_payload: dict, roof: dict) -> dict[str, fl
         "roof_area_delta_m2": round(ontology_roof_area - heuristic_roof_area, 6),
         "unresolved_area_m2": unresolved_area,
         "ontology_ceiling_area_m2": ontology_ceiling_area,
+        "ontology_shell_ceiling_area_m2": ontology_shell_ceiling_area,
         "heuristic_ceiling_area_m2": heuristic_ceiling_area,
         "ceiling_area_ratio": _ratio(ontology_ceiling_area, heuristic_ceiling_area),
+        "shell_ceiling_area_ratio": _ratio(ontology_shell_ceiling_area, heuristic_ceiling_area),
         "ceiling_area_delta_m2": round(ontology_ceiling_area - heuristic_ceiling_area, 6),
+        "shell_ceiling_area_delta_m2": round(ontology_shell_ceiling_area - heuristic_ceiling_area, 6),
+        "roof_overlap_projected_area_m2": roof_overlap["overlap_projected_area_m2"],
+        "roof_ontology_only_projected_area_m2": roof_overlap["ontology_only_projected_area_m2"],
+        "roof_heuristic_only_projected_area_m2": roof_overlap["heuristic_only_projected_area_m2"],
+        "roof_overlap_ratio_vs_heuristic": roof_overlap["overlap_ratio_vs_heuristic"],
+        "semantic_ceiling_overlap_projected_area_m2": semantic_ceiling_overlap["overlap_projected_area_m2"],
+        "semantic_ceiling_heuristic_only_projected_area_m2": semantic_ceiling_overlap["heuristic_only_projected_area_m2"],
+        "semantic_ceiling_overlap_ratio_vs_heuristic": semantic_ceiling_overlap["overlap_ratio_vs_heuristic"],
+        "shell_ceiling_overlap_projected_area_m2": shell_ceiling_overlap["overlap_projected_area_m2"],
+        "shell_ceiling_heuristic_only_projected_area_m2": shell_ceiling_overlap["heuristic_only_projected_area_m2"],
+        "shell_ceiling_overlap_ratio_vs_heuristic": shell_ceiling_overlap["overlap_ratio_vs_heuristic"],
+    }
+
+
+def _surface_polygon_xz(surface: dict) -> Polygon | None:
+    corners = _surface_corners(surface)
+    if len(corners) < 3:
+        return None
+    points: list[tuple[float, float]] = []
+    for corner in corners:
+        if not isinstance(corner, (list, tuple)) or len(corner) < 3:
+            return None
+        points.append((float(corner[0]), float(corner[2])))
+    try:
+        poly = Polygon(points)
+    except Exception:
+        return None
+    if poly.is_empty or poly.area <= 1e-6:
+        return None
+    if not poly.is_valid:
+        try:
+            poly = make_valid(poly)
+        except Exception:
+            return None
+    if isinstance(poly, Polygon):
+        return poly if poly.area > 1e-6 else None
+    if getattr(poly, "geom_type", "") == "MultiPolygon":
+        try:
+            return max((part for part in poly.geoms if isinstance(part, Polygon) and part.area > 1e-6), key=lambda part: part.area)
+        except ValueError:
+            return None
+    return None
+
+
+def _union_projected_area_and_overlap(ontology_surfaces: list[dict], heuristic_surfaces: list[dict]) -> dict[str, float]:
+    ontology_polys = [poly for surface in ontology_surfaces if isinstance(surface, dict) for poly in [_surface_polygon_xz(surface)] if poly is not None]
+    heuristic_polys = [poly for surface in heuristic_surfaces if isinstance(surface, dict) for poly in [_surface_polygon_xz(surface)] if poly is not None]
+    ontology_union = unary_union(ontology_polys) if ontology_polys else None
+    heuristic_union = unary_union(heuristic_polys) if heuristic_polys else None
+    ontology_area = float(getattr(ontology_union, "area", 0.0) or 0.0)
+    heuristic_area = float(getattr(heuristic_union, "area", 0.0) or 0.0)
+    overlap_area = 0.0
+    if ontology_union is not None and heuristic_union is not None:
+        try:
+            overlap_area = float(ontology_union.intersection(heuristic_union).area)
+        except Exception:
+            overlap_area = 0.0
+    return {
+        "ontology_projected_area_m2": round(ontology_area, 6),
+        "heuristic_projected_area_m2": round(heuristic_area, 6),
+        "overlap_projected_area_m2": round(overlap_area, 6),
+        "ontology_only_projected_area_m2": round(max(0.0, ontology_area - overlap_area), 6),
+        "heuristic_only_projected_area_m2": round(max(0.0, heuristic_area - overlap_area), 6),
+        "overlap_ratio_vs_heuristic": round(overlap_area / heuristic_area, 6) if heuristic_area > 1e-6 else None,
+        "overlap_ratio_vs_ontology": round(overlap_area / ontology_area, 6) if ontology_area > 1e-6 else None,
     }
 
 
@@ -552,14 +642,45 @@ def main() -> None:
         for row in area_metrics_rows
         if row.get("ceiling_area_ratio") is not None
     ]
+    shell_ceiling_ratio_values = [
+        float(row["shell_ceiling_area_ratio"])
+        for row in area_metrics_rows
+        if row.get("shell_ceiling_area_ratio") is not None
+    ]
+    roof_overlap_values = [
+        float(row["roof_overlap_ratio_vs_heuristic"])
+        for row in area_metrics_rows
+        if row.get("roof_overlap_ratio_vs_heuristic") is not None
+    ]
+    semantic_ceiling_overlap_values = [
+        float(row["semantic_ceiling_overlap_ratio_vs_heuristic"])
+        for row in area_metrics_rows
+        if row.get("semantic_ceiling_overlap_ratio_vs_heuristic") is not None
+    ]
+    shell_ceiling_overlap_values = [
+        float(row["shell_ceiling_overlap_ratio_vs_heuristic"])
+        for row in area_metrics_rows
+        if row.get("shell_ceiling_overlap_ratio_vs_heuristic") is not None
+    ]
     aggregate["area_metrics"] = {
         "ontology_roof_area_m2": round(sum(float(row.get("ontology_roof_area_m2", 0.0) or 0.0) for row in area_metrics_rows), 6),
         "heuristic_roof_area_m2": round(sum(float(row.get("heuristic_roof_area_m2", 0.0) or 0.0) for row in area_metrics_rows), 6),
         "roof_area_ratio_avg": round(sum(roof_ratio_values) / len(roof_ratio_values), 6) if roof_ratio_values else None,
+        "roof_overlap_ratio_vs_heuristic_avg": round(sum(roof_overlap_values) / len(roof_overlap_values), 6) if roof_overlap_values else None,
+        "roof_overlap_projected_area_m2": round(sum(float(row.get("roof_overlap_projected_area_m2", 0.0) or 0.0) for row in area_metrics_rows), 6),
+        "roof_heuristic_only_projected_area_m2": round(sum(float(row.get("roof_heuristic_only_projected_area_m2", 0.0) or 0.0) for row in area_metrics_rows), 6),
         "unresolved_area_m2": round(sum(float(row.get("unresolved_area_m2", 0.0) or 0.0) for row in area_metrics_rows), 6),
         "ontology_ceiling_area_m2": round(sum(float(row.get("ontology_ceiling_area_m2", 0.0) or 0.0) for row in area_metrics_rows), 6),
+        "ontology_shell_ceiling_area_m2": round(sum(float(row.get("ontology_shell_ceiling_area_m2", 0.0) or 0.0) for row in area_metrics_rows), 6),
         "heuristic_ceiling_area_m2": round(sum(float(row.get("heuristic_ceiling_area_m2", 0.0) or 0.0) for row in area_metrics_rows), 6),
         "ceiling_area_ratio_avg": round(sum(ceiling_ratio_values) / len(ceiling_ratio_values), 6) if ceiling_ratio_values else None,
+        "shell_ceiling_area_ratio_avg": round(sum(shell_ceiling_ratio_values) / len(shell_ceiling_ratio_values), 6) if shell_ceiling_ratio_values else None,
+        "semantic_ceiling_overlap_ratio_vs_heuristic_avg": round(sum(semantic_ceiling_overlap_values) / len(semantic_ceiling_overlap_values), 6) if semantic_ceiling_overlap_values else None,
+        "semantic_ceiling_overlap_projected_area_m2": round(sum(float(row.get("semantic_ceiling_overlap_projected_area_m2", 0.0) or 0.0) for row in area_metrics_rows), 6),
+        "semantic_ceiling_heuristic_only_projected_area_m2": round(sum(float(row.get("semantic_ceiling_heuristic_only_projected_area_m2", 0.0) or 0.0) for row in area_metrics_rows), 6),
+        "shell_ceiling_overlap_ratio_vs_heuristic_avg": round(sum(shell_ceiling_overlap_values) / len(shell_ceiling_overlap_values), 6) if shell_ceiling_overlap_values else None,
+        "shell_ceiling_overlap_projected_area_m2": round(sum(float(row.get("shell_ceiling_overlap_projected_area_m2", 0.0) or 0.0) for row in area_metrics_rows), 6),
+        "shell_ceiling_heuristic_only_projected_area_m2": round(sum(float(row.get("shell_ceiling_heuristic_only_projected_area_m2", 0.0) or 0.0) for row in area_metrics_rows), 6),
     }
 
     def _sorted_rows(predicate) -> list[dict]:

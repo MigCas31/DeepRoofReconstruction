@@ -17,6 +17,12 @@ export function renderRoofFromPythonResult({
   const flatCeilings = Array.isArray(pyResult?.ceiling?.flat) ? pyResult.ceiling.flat : [];
   // ceiling.oblique is now merged into roof_surfaces.oblique
   const simpleSlantCeilings = Array.isArray(pyResult?.ceiling?.simple_slant) ? pyResult.ceiling.simple_slant : [];
+  const roomPartitions = Array.isArray(pyResult?.ceiling?.room_partitions) ? pyResult.ceiling.room_partitions : [];
+  const partitionedRoomIndices = new Set(
+    roomPartitions
+      .filter((room) => Number.isInteger(room?.room_index) && Number(room?.partition_count || 0) > 0)
+      .map((room) => room.room_index)
+  );
 
   const roofClusterData = Array.isArray(pyResult.roof_cluster_data)
     ? pyResult.roof_cluster_data.map((e, i) => ({
@@ -170,6 +176,7 @@ export function renderRoofFromPythonResult({
 
   for (let i = 0; i < simpleSlantCeilings.length; i++) {
     const c = simpleSlantCeilings[i];
+    if (Number.isInteger(c?.room_index) && partitionedRoomIndices.has(c.room_index)) continue;
     if (!Array.isArray(c.poly) || c.poly.length < 3) continue;
     const ceilMesh = createPolygonMesh(c.poly, 0xccaa88, 0.3);
     if (ceilMesh) {

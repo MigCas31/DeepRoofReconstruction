@@ -54,6 +54,7 @@ export const LAYER_CONTROL_IDS = {
   thermalCeilings: 'show-thermal-ceilings',
   roofClusters: 'show-roof-clusters',
   ontologySemantics: 'show-ontology-semantics',
+  ontologyContinuation: 'show-ontology-continuation',
   ontologyCells: 'show-ontology-cells',
   fullModel: 'show-full-model',
 };

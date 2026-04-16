@@ -59,7 +59,17 @@ def test_roof_envelope_continuation_promotes_flat_only_sloped_room_to_exact_uppe
                     "coverage_area_m2": 16.0,
                     "edge_score": 0.85,
                 },
-            }
+            },
+            {
+                "id": "edge:continues:0",
+                "type": "CONTINUES_AS",
+                "from": "roof-hypothesis:oblique:0",
+                "to": "roof-hypothesis:oblique:peer",
+                "evidence": {
+                    "exact_face_incidence": True,
+                    "partition_atom_pairs": [["atom:room0", "atom:peer"]],
+                },
+            },
         ],
         "selected_room_assignments": {
             "room:0": ["roof-hypothesis:oblique:0"],
@@ -148,11 +158,15 @@ def test_roof_envelope_continuation_promotes_flat_only_sloped_room_to_exact_uppe
     )
 
     assert result["metadata"]["continued_room_count"] == 1
+    assert result["metadata"]["continuation_region_count"] == 1
     assert result["continued_room_indices"] == [1]
     assert result["hypothesis_graph"]["selected_room_assignments"]["room:1"] == ["roof-hypothesis:oblique:0"]
+    assert result["continuation_regions"][0]["continuation_mode"] == "arrangement_face"
+    assert result["continuation_regions"][0]["exact_incidence_pair_count"] == 1
+    assert result["continued_surfaces"][0]["continuation_source"] == "arrangement_face"
 
     final_partitions = derive_room_ceiling_partitions(
-        exposed_rooms=exposed_rooms,
+        room_records=exposed_rooms,
         oblique_roof_surfaces=result["selected_oblique_surfaces"],
         flat_roof_surfaces=[],
         hypothesis_graph=result["hypothesis_graph"],
@@ -167,7 +181,7 @@ def test_roof_envelope_continuation_promotes_flat_only_sloped_room_to_exact_uppe
         building_part_graph=building_part_graph,
     )
     top_boundary_graph = build_top_boundary_graph(
-        exposed_rooms=exposed_rooms,
+        room_records=exposed_rooms,
         room_partitions=final_partitions["room_partitions"],
         building_part_graph=building_part_graph,
         roof_coverage_graph=final_coverage,

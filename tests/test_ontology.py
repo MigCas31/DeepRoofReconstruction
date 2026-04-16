@@ -609,6 +609,20 @@ def test_viewer_ontology_summary_assigns_unassigned_atoms_and_subparts() -> None
             ]
         },
         "roof_evidence_graph": {"metadata": {}},
+        "roof_continuation_diagnostics": {
+            "continuation_regions": [
+                {
+                    "id": "continuation-region:0",
+                    "roof_hypothesis_id": "roof-hypothesis:oblique:1",
+                    "room_id": "room:1",
+                    "room_index": 1,
+                    "continuation_mode": "arrangement_face",
+                    "polygon": [[3.0, 3.0, 0.0], [5.0, 3.5, 0.0], [5.0, 3.5, 2.0], [3.0, 3.0, 2.0]],
+                    "polygon_xz": [[3.0, 0.0], [5.0, 0.0], [5.0, 2.0], [3.0, 2.0]],
+                    "exact_incidence_pair_count": 1,
+                }
+            ]
+        },
         "roof_cell_complex": {
             "cells": [{"id": "roof-cell:0", "part_id": None, "room_id": "room:1"}],
             "knee_walls": [{"id": "knee:0", "part_id": None, "room_index": 1}],
@@ -640,10 +654,14 @@ def test_viewer_ontology_summary_assigns_unassigned_atoms_and_subparts() -> None
     assert summary["oblique_coverage_patches"][0]["room_ids"] == ["room:1"]
     assert summary["oblique_coverage_patches"][0]["coverage_subpart_id"] == "subpart:0"
     assert "subpart:0" in summary["oblique_coverage_patches"][0]["id"]
+    assert len(summary["roof_continuation_diagnostics"]) == 1
+    assert summary["roof_continuation_diagnostics"][0]["effective_part_ids"] == [UNASSIGNED_PART_ID]
+    assert summary["roof_continuation_diagnostics"][0]["continuation_mode"] == "arrangement_face"
     assert len(summary["unresolved_regions"]) == 1
     assert summary["unresolved_regions"][0]["room_id"] == "room:1"
     assert [surface["category"] for surface in summary["renderable_surfaces"]] == ["attic_floor", "unresolved_region"]
     assert summary["metadata"]["renderable_surface_counts"] == {"attic_floor": 1, "unresolved_region": 1}
+    assert summary["metadata"]["roof_continuation_region_count"] == 1
     assert part_graph_room_ids["building-part:0"] == {"room:merged_room_0"}
     assert part_graph_room_ids[UNASSIGNED_PART_ID] == {"room:merged_room_1"}
 
@@ -1109,6 +1127,9 @@ def test_viewer_ontology_part_payloads_prefer_exact_occupied_room_cells() -> Non
     top_profiles = sorted(sorted(corner[1] for corner in surface["corners"])[-2:] for surface in front_wall_surfaces)
     assert top_profiles[0] == pytest.approx([2.0, 2.0], abs=1e-5)
     assert top_profiles[1] == pytest.approx([2.0, 3.0], abs=1e-5)
+    ceiling_profiles = sorted(sorted(corner[1] for corner in surface["corners"]) for surface in ceiling_surfaces)
+    assert ceiling_profiles[0] == pytest.approx([2.0, 2.0, 2.0, 2.0], abs=1e-5)
+    assert ceiling_profiles[1] == pytest.approx([2.0, 2.0, 3.0, 3.0], abs=1e-5)
     assert sum(len(surface.get("holes") or []) for surface in wall_surfaces) == 1
     assert window_surfaces[0]["source_kind"] == "window"
 
@@ -1184,6 +1205,150 @@ def test_viewer_ontology_part_payloads_promote_roof_surface_fallbacks_and_unreso
     assert payload["metadata"]["unresolved_region_count"] == 1
 
 
+def test_viewer_ontology_part_payloads_drop_roomless_flat_fallback_when_selected_rooms_are_resolved() -> None:
+    summary = {
+        "uuid": "test-uuid",
+        "building_parts": [
+            {"id": FULL_BUILDING_PART_ID, "room_ids": ["room:0"], "room_indices": [0], "synthetic": True, "synthetic_role": "full_building"},
+        ],
+        "room_summaries": {
+            "room:0": {
+                "room_index": 0,
+                "story": 0,
+                "has_resolved_roof_relation": True,
+                "partially_covered_by_sloped_roof": False,
+                "roof_evidence_score": 0,
+            }
+        },
+        "semantic_atoms": [],
+        "unresolved_regions": [],
+        "dormers": [],
+    }
+    building = {
+        "rooms": [
+            {
+                "story": 0,
+                "floor_polygon": [[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [4.0, 0.0, 2.0], [0.0, 0.0, 2.0]],
+                "windows": [],
+                "doors": [],
+                "openings": [],
+                "walls_computed": [],
+            }
+        ]
+    }
+    roof = {
+        "roof_surfaces": {
+            "flat": [
+                {
+                    "story": 0,
+                    "room_index": None,
+                    "corners": [[0.0, 3.0, 0.0], [4.0, 3.0, 0.0], [4.0, 3.0, 2.0], [0.0, 3.0, 2.0]],
+                    "surface_kind": "flat",
+                    "boundary_face_id": "face:roof-flat:0",
+                    "roof_hypothesis_id": "roof-hypothesis:flat:0",
+                    "flat_role": "roof_flat",
+                }
+            ],
+            "oblique": [],
+        },
+        "roof_hypothesis_graph": {
+            "selected_hypothesis_ids": ["roof-hypothesis:flat:0"],
+            "edges": [
+                {
+                    "type": "COVERS_ROOM",
+                    "from": "roof-hypothesis:flat:0",
+                    "to": "room:0",
+                    "selected": True,
+                }
+            ],
+        },
+    }
+
+    payloads = _build_ontology_part_payloads(
+        uuid="test-uuid",
+        summary=summary,
+        part_graph_room_ids={FULL_BUILDING_PART_ID: set()},
+        topology_cell_complex={"cells": []},
+        roof_cell_complex={"cells": [], "knee_walls": []},
+        occupied_room_cell_complex={"cells": []},
+        building=building,
+        roof=roof,
+    )
+
+    payload = payloads[FULL_BUILDING_PART_ID]
+    categories = [surface["category"] for surface in payload["renderable_surfaces"]]
+    assert "unresolved_region" not in categories
+    assert "exterior_roof" not in categories
+    assert payload["metadata"]["roof_fallback_surface_count"] == 0
+    assert payload["metadata"]["unresolved_region_count"] == 0
+
+
+def test_viewer_ontology_part_payloads_drop_roomless_flat_fallback_without_semantic_atoms_even_if_room_not_resolved() -> None:
+    summary = {
+        "uuid": "test-uuid",
+        "building_parts": [
+            {"id": FULL_BUILDING_PART_ID, "room_ids": ["room:0"], "room_indices": [0], "synthetic": True, "synthetic_role": "full_building"},
+        ],
+        "room_summaries": {
+            "room:0": {
+                "room_index": 0,
+                "story": 0,
+                "has_resolved_roof_relation": False,
+                "partially_covered_by_sloped_roof": False,
+                "roof_evidence_score": 0,
+            }
+        },
+        "semantic_atoms": [],
+        "unresolved_regions": [],
+        "dormers": [],
+    }
+    roof = {
+        "roof_surfaces": {
+            "flat": [
+                {
+                    "story": 0,
+                    "room_index": None,
+                    "corners": [[0.0, 3.0, 0.0], [4.0, 3.0, 0.0], [4.0, 3.0, 2.0], [0.0, 3.0, 2.0]],
+                    "surface_kind": "flat",
+                    "boundary_face_id": "face:roof-flat:1",
+                    "roof_hypothesis_id": "roof-hypothesis:flat:1",
+                    "flat_role": "roof_flat",
+                }
+            ],
+            "oblique": [],
+        },
+        "roof_hypothesis_graph": {
+            "selected_hypothesis_ids": ["roof-hypothesis:flat:1"],
+            "edges": [
+                {
+                    "type": "COVERS_ROOM",
+                    "from": "roof-hypothesis:flat:1",
+                    "to": "room:0",
+                    "selected": True,
+                }
+            ],
+        },
+    }
+
+    payloads = _build_ontology_part_payloads(
+        uuid="test-uuid",
+        summary=summary,
+        part_graph_room_ids={FULL_BUILDING_PART_ID: set()},
+        topology_cell_complex={"cells": []},
+        roof_cell_complex={"cells": [], "knee_walls": []},
+        occupied_room_cell_complex={"cells": []},
+        building={"rooms": [{"story": 0, "floor_polygon": [], "walls_computed": [], "windows": [], "doors": [], "openings": []}]},
+        roof=roof,
+    )
+
+    payload = payloads[FULL_BUILDING_PART_ID]
+    categories = [surface["category"] for surface in payload["renderable_surfaces"]]
+    assert "unresolved_region" not in categories
+    assert "exterior_roof" not in categories
+    assert payload["metadata"]["roof_fallback_surface_count"] == 0
+    assert payload["metadata"]["unresolved_region_count"] == 0
+
+
 def test_viewer_ontology_part_payloads_include_summary_unresolved_regions() -> None:
     summary = {
         "uuid": "test-uuid",
@@ -1220,6 +1385,107 @@ def test_viewer_ontology_part_payloads_include_summary_unresolved_regions() -> N
     unresolved_surfaces = [surface for surface in payload["renderable_surfaces"] if surface["category"] == "unresolved_region"]
     assert len(unresolved_surfaces) == 1
     assert payload["unresolved_regions"][0]["room_id"] == "room:0"
+    assert payload["metadata"]["unresolved_region_count"] == 1
+
+
+def test_renderable_surface_from_atom_includes_flat_ceiling_role() -> None:
+    summary = {
+        "uuid": "test-uuid",
+        "building_parts": [
+            {"id": FULL_BUILDING_PART_ID, "room_ids": ["room:0"], "room_indices": [0], "synthetic": True, "synthetic_role": "full_building"},
+        ],
+        "semantic_atoms": [
+            {
+                "id": "atom:flat",
+                "type": "TopBoundaryAtom",
+                "room_id": "room:0",
+                "room_index": 0,
+                "story": 0,
+                "effective_part_id": FULL_BUILDING_PART_ID,
+                "role": "flat_ceiling",
+                "kind": "flat",
+                "poly": [[0.0, 2.0, 0.0], [4.0, 2.0, 0.0], [4.0, 2.0, 2.0], [0.0, 2.0, 2.0]],
+                "roof_hypothesis_id": "roof-hypothesis:flat:0",
+                "top_y_m": 2.0,
+            }
+        ],
+        "unresolved_regions": [],
+        "dormers": [],
+    }
+
+    payloads = _build_ontology_part_payloads(
+        uuid="test-uuid",
+        summary=summary,
+        part_graph_room_ids={FULL_BUILDING_PART_ID: set()},
+        topology_cell_complex={"cells": []},
+        roof_cell_complex={"cells": [], "knee_walls": []},
+        occupied_room_cell_complex={"cells": []},
+        building={"rooms": [{"story": 0, "floor_polygon": [], "walls_computed": [], "windows": [], "doors": [], "openings": []}]},
+        roof={"roof_surfaces": {"flat": [], "oblique": []}},
+    )
+
+    payload = payloads[FULL_BUILDING_PART_ID]
+    semantic_surfaces = [surface for surface in payload["renderable_surfaces"] if surface["category"] == "room_ceiling_flat"]
+    assert len(semantic_surfaces) == 1
+    assert semantic_surfaces[0]["source_kind"] == "semantic_atom"
+    assert semantic_surfaces[0]["source_id"] == "atom:flat"
+
+
+def test_viewer_ontology_part_payloads_demote_synthetic_occupied_ceiling_to_unresolved() -> None:
+    summary = {
+        "uuid": "test-uuid",
+        "building_parts": [
+            {"id": FULL_BUILDING_PART_ID, "room_ids": ["room:0"], "room_indices": [0], "synthetic": True, "synthetic_role": "full_building"},
+        ],
+        "room_summaries": {},
+        "unresolved_regions": [],
+        "dormers": [],
+    }
+    building = {
+        "rooms": [
+            {
+                "story": 0,
+                "floor_polygon": [[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [4.0, 0.0, 2.0], [0.0, 0.0, 2.0]],
+                "windows": [],
+                "doors": [],
+                "openings": [],
+                "walls_computed": [
+                    {
+                        "id": "wall:0",
+                        "corners": [[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [4.0, 2.4, 0.0], [0.0, 2.4, 0.0]],
+                    }
+                ],
+            }
+        ]
+    }
+    roof = {
+        "ceiling_partitions": {"room_partitions": []},
+        "roof_surfaces": {"flat": [], "oblique": []},
+    }
+    occupied_room_cell_complex = build_occupied_room_cell_complex(
+        bldg=building,
+        room_partitions=[],
+        building_part_graph={"room_membership": {"room:0": [FULL_BUILDING_PART_ID]}},
+    )
+
+    payloads = _build_ontology_part_payloads(
+        uuid="test-uuid",
+        summary=summary,
+        part_graph_room_ids={FULL_BUILDING_PART_ID: set()},
+        topology_cell_complex={"cells": []},
+        roof_cell_complex={"cells": [], "knee_walls": []},
+        occupied_room_cell_complex=occupied_room_cell_complex,
+        building=building,
+        roof=roof,
+    )
+
+    payload = payloads[FULL_BUILDING_PART_ID]
+    categories = [surface["category"] for surface in payload["renderable_surfaces"]]
+    assert "fallback_room_ceiling" not in categories
+    assert categories.count("unresolved_region") == 1
+    unresolved = next(surface for surface in payload["renderable_surfaces"] if surface["category"] == "unresolved_region")
+    assert unresolved["room_id"] == "room:0"
+    assert unresolved["source_kind"] == "unresolved_region"
     assert payload["metadata"]["unresolved_region_count"] == 1
 
 
@@ -1341,7 +1607,69 @@ def test_viewer_ontology_part_payloads_promote_exact_flat_roof_shell_for_resolve
     assert payload["metadata"]["unresolved_region_count"] == 0
 
 
-def test_viewer_ontology_part_payloads_promote_roomless_oblique_surfaces_from_coverage_patches() -> None:
+def test_viewer_ontology_part_payloads_do_not_promote_exact_flat_roof_shell_for_resolved_sloped_room() -> None:
+    summary = {
+        "uuid": "test-uuid",
+        "building_parts": [
+            {"id": FULL_BUILDING_PART_ID, "room_ids": ["room:1"], "room_indices": [1], "synthetic": True, "synthetic_role": "full_building"},
+        ],
+        "room_summaries": {
+            "room:1": {
+                "room_index": 1,
+                "story": 0,
+                "roles": ["sloped_ceiling"],
+                "partially_covered_by_sloped_roof": True,
+                "covered_by_sloped_roof": False,
+                "strong_perimeter_sloped": True,
+                "strong_knee_wall_signal": False,
+                "has_attic_relation": False,
+                "has_upper_void_relation": False,
+                "has_resolved_roof_relation": True,
+                "has_candidate_attic_relation": False,
+                "has_candidate_upper_void_relation": False,
+                "has_oblique_atom": True,
+                "roof_evidence_score": 2,
+            }
+        },
+        "unresolved_regions": [],
+        "dormers": [],
+    }
+
+    payloads = _build_ontology_part_payloads(
+        uuid="test-uuid",
+        summary=summary,
+        part_graph_room_ids={FULL_BUILDING_PART_ID: set()},
+        topology_cell_complex={"cells": []},
+        roof_cell_complex={"cells": [], "knee_walls": []},
+        occupied_room_cell_complex={"cells": []},
+        building={"rooms": [{"story": 0, "floor_polygon": [], "walls_computed": [], "windows": [], "doors": [], "openings": []}]},
+        roof={
+            "roof_surfaces": {
+                "flat": [
+                    {
+                        "story": 0,
+                        "room_index": 1,
+                        "corners": [[0.0, 3.0, 0.0], [4.0, 3.0, 0.0], [4.0, 3.0, 2.0], [0.0, 3.0, 2.0]],
+                        "surface_kind": "flat",
+                        "boundary_face_id": "face:roof-flat:sloped-room",
+                        "roof_hypothesis_id": "roof-hypothesis:flat:sloped-room",
+                        "flat_role": "roof_flat",
+                    }
+                ],
+                "oblique": [],
+            }
+        },
+    )
+
+    payload = payloads[FULL_BUILDING_PART_ID]
+    roof_surfaces = [surface for surface in payload["renderable_surfaces"] if surface["category"] == "exterior_roof"]
+    assert roof_surfaces == []
+    assert payload["metadata"]["roof_exact_flat_surface_count"] == 0
+    assert payload["metadata"]["roof_fallback_surface_count"] == 0
+    assert payload["metadata"]["unresolved_region_count"] == 0
+
+
+def test_viewer_ontology_part_payloads_do_not_promote_coverage_patches_into_shell_geometry() -> None:
     summary = {
         "uuid": "test-uuid",
         "building_parts": [
@@ -1414,15 +1742,468 @@ def test_viewer_ontology_part_payloads_promote_roomless_oblique_surfaces_from_co
         roof=roof,
     )
 
-    for part_id in ("building-part:0", FULL_BUILDING_PART_ID):
-        payload = payloads[part_id]
-        roof_surfaces = [surface for surface in payload["renderable_surfaces"] if surface["category"] == "exterior_roof"]
-        assert len(roof_surfaces) == 1
-        assert roof_surfaces[0]["source_kind"] == "roof_coverage_patch"
-        assert roof_surfaces[0]["coverage_subpart_id"] == "coverage-subpart:0"
-        assert roof_surfaces[0]["room_index"] == 0
-        assert roof_surfaces[0]["room_indices"] == [0]
-        assert [surface["category"] for surface in payload["renderable_surfaces"]].count("unresolved_region") == 0
-        assert payload["metadata"]["roof_coverage_patch_surface_count"] == 1
-        assert payload["metadata"]["roof_fallback_surface_count"] == 0
-        assert payload["metadata"]["unresolved_region_count"] == 0
+    part_payload = payloads["building-part:0"]
+    assert [surface["category"] for surface in part_payload["renderable_surfaces"]].count("exterior_roof") == 0
+    assert part_payload["metadata"]["roof_coverage_patch_surface_count"] == 0
+    assert part_payload["metadata"]["roof_fallback_surface_count"] == 0
+    assert part_payload["metadata"]["unresolved_region_count"] == 0
+
+    full_payload = payloads[FULL_BUILDING_PART_ID]
+    roof_surfaces = [surface for surface in full_payload["renderable_surfaces"] if surface["category"] == "exterior_roof"]
+    assert len(roof_surfaces) == 0
+    assert [surface["category"] for surface in full_payload["renderable_surfaces"]].count("unresolved_region") == 1
+    assert full_payload["metadata"]["roof_coverage_patch_surface_count"] == 0
+    assert full_payload["metadata"]["roof_fallback_surface_count"] == 0
+    assert full_payload["metadata"]["unresolved_region_count"] == 1
+
+
+def test_viewer_ontology_part_payloads_replace_roomless_oblique_fallback_with_atom_patches() -> None:
+    summary = {
+        "uuid": "test-uuid",
+        "building_parts": [
+            {"id": FULL_BUILDING_PART_ID, "room_ids": ["room:1"], "room_indices": [1], "synthetic": True, "synthetic_role": "full_building"},
+        ],
+        "semantic_atoms": [
+            {
+                "id": "atom:oblique:1",
+                "type": "TopBoundaryAtom",
+                "kind": "oblique",
+                "role": "sloped_ceiling",
+                "room_id": "room:1",
+                "room_index": 1,
+                "story": 0,
+                "roof_hypothesis_id": "roof-hypothesis:oblique:0",
+                "effective_part_id": FULL_BUILDING_PART_ID,
+                "poly": [[0.0, 3.0, 0.0], [2.0, 3.4, 0.0], [2.0, 3.4, 2.0], [0.0, 3.0, 2.0]],
+            }
+        ],
+        "room_summaries": {},
+        "unresolved_regions": [],
+        "dormers": [],
+    }
+    roof = {
+        "roof_surfaces": {
+            "flat": [],
+            "oblique": [
+                {
+                    "story": 0,
+                    "corners": [[0.0, 3.0, 0.0], [4.0, 3.8, 0.0], [4.0, 3.8, 2.0], [0.0, 3.0, 2.0]],
+                    "surface_kind": "oblique",
+                    "boundary_face_id": "face:roof-oblique:0",
+                    "roof_hypothesis_id": "roof-hypothesis:oblique:0",
+                }
+            ],
+        }
+    }
+
+    payloads = _build_ontology_part_payloads(
+        uuid="test-uuid",
+        summary=summary,
+        part_graph_room_ids={FULL_BUILDING_PART_ID: set()},
+        topology_cell_complex={"cells": []},
+        roof_cell_complex={"cells": [], "knee_walls": []},
+        occupied_room_cell_complex={"cells": []},
+        building={"rooms": []},
+        roof=roof,
+    )
+
+    payload = payloads[FULL_BUILDING_PART_ID]
+    roof_surfaces = [surface for surface in payload["renderable_surfaces"] if surface["category"] == "exterior_roof"]
+    assert len(roof_surfaces) == 1
+    assert roof_surfaces[0]["source_kind"] == "roof_atom_patch"
+    assert roof_surfaces[0]["room_index"] == 1
+    assert payload["metadata"]["roof_fallback_surface_count"] == 0
+    assert payload["metadata"]["unresolved_region_count"] == 0
+
+
+def test_viewer_ontology_part_payloads_reject_roomless_oblique_fallback_without_atom_patches() -> None:
+    summary = {
+        "uuid": "test-uuid",
+        "building_parts": [
+            {"id": FULL_BUILDING_PART_ID, "room_ids": [], "room_indices": [], "synthetic": True, "synthetic_role": "full_building"},
+        ],
+        "semantic_atoms": [],
+        "room_summaries": {},
+        "unresolved_regions": [],
+        "dormers": [],
+    }
+    roof = {
+        "roof_surfaces": {
+            "flat": [],
+            "oblique": [
+                {
+                    "story": 0,
+                    "corners": [[0.0, 3.0, 0.0], [4.0, 3.8, 0.0], [4.0, 3.8, 2.0], [0.0, 3.0, 2.0]],
+                    "surface_kind": "oblique",
+                    "boundary_face_id": "face:roof-oblique:0",
+                    "roof_hypothesis_id": "roof-hypothesis:oblique:0",
+                }
+            ],
+        }
+    }
+
+    payloads = _build_ontology_part_payloads(
+        uuid="test-uuid",
+        summary=summary,
+        part_graph_room_ids={FULL_BUILDING_PART_ID: set()},
+        topology_cell_complex={"cells": []},
+        roof_cell_complex={"cells": [], "knee_walls": []},
+        occupied_room_cell_complex={"cells": []},
+        building={"rooms": []},
+        roof=roof,
+    )
+
+    payload = payloads[FULL_BUILDING_PART_ID]
+    assert [surface["category"] for surface in payload["renderable_surfaces"]].count("exterior_roof") == 0
+    assert [surface["category"] for surface in payload["renderable_surfaces"]].count("unresolved_region") == 1
+    assert payload["metadata"]["roof_fallback_surface_count"] == 0
+    assert payload["metadata"]["unresolved_region_count"] == 1
+
+
+def test_viewer_ontology_part_payloads_replace_roomless_flat_fallback_with_atom_patches() -> None:
+    summary = {
+        "uuid": "test-uuid",
+        "building_parts": [
+            {"id": FULL_BUILDING_PART_ID, "room_ids": ["room:1"], "room_indices": [1], "synthetic": True, "synthetic_role": "full_building"},
+        ],
+        "semantic_atoms": [
+            {
+                "id": "atom:flat:1",
+                "type": "TopBoundaryAtom",
+                "kind": "flat",
+                "flat_role": "roof_flat",
+                "role": "flat_ceiling",
+                "room_id": "room:1",
+                "room_index": 1,
+                "story": 0,
+                "roof_hypothesis_id": "roof-hypothesis:flat:0",
+                "effective_part_id": FULL_BUILDING_PART_ID,
+                "poly": [[0.0, 3.0, 0.0], [2.0, 3.0, 0.0], [2.0, 3.0, 2.0], [0.0, 3.0, 2.0]],
+            }
+        ],
+        "room_summaries": {},
+        "unresolved_regions": [],
+        "dormers": [],
+    }
+    roof = {
+        "roof_surfaces": {
+            "flat": [
+                {
+                    "story": 0,
+                    "corners": [[0.0, 3.0, 0.0], [4.0, 3.0, 0.0], [4.0, 3.0, 2.0], [0.0, 3.0, 2.0]],
+                    "surface_kind": "flat",
+                    "boundary_face_id": "face:roof-flat:0",
+                    "roof_hypothesis_id": "roof-hypothesis:flat:0",
+                    "flat_role": "roof_flat",
+                }
+            ],
+            "oblique": [],
+        }
+    }
+
+    payloads = _build_ontology_part_payloads(
+        uuid="test-uuid",
+        summary=summary,
+        part_graph_room_ids={FULL_BUILDING_PART_ID: set()},
+        topology_cell_complex={"cells": []},
+        roof_cell_complex={"cells": [], "knee_walls": []},
+        occupied_room_cell_complex={"cells": []},
+        building={"rooms": []},
+        roof=roof,
+    )
+
+    payload = payloads[FULL_BUILDING_PART_ID]
+    roof_surfaces = [surface for surface in payload["renderable_surfaces"] if surface["category"] == "exterior_roof"]
+    assert len(roof_surfaces) == 1
+    assert roof_surfaces[0]["source_kind"] == "roof_atom_patch"
+    assert roof_surfaces[0]["surface_kind"] == "flat"
+    assert payload["metadata"]["roof_exact_flat_surface_count"] == 1
+    assert payload["metadata"]["roof_fallback_surface_count"] == 0
+    assert payload["metadata"]["unresolved_region_count"] == 0
+
+
+def test_viewer_ontology_part_payloads_do_not_promote_flat_transition_caps_into_flat_roof_atom_patches() -> None:
+    summary = {
+        "uuid": "test-uuid",
+        "building_parts": [
+            {"id": FULL_BUILDING_PART_ID, "room_ids": ["room:1"], "room_indices": [1], "synthetic": True, "synthetic_role": "full_building"},
+        ],
+        "semantic_atoms": [
+            {
+                "id": "atom:flat:transition",
+                "type": "TopBoundaryAtom",
+                "kind": "flat",
+                "flat_role": "roof_flat",
+                "role": "flat_transition_cap",
+                "room_id": "room:1",
+                "room_index": 1,
+                "story": 0,
+                "roof_hypothesis_id": "roof-hypothesis:flat:0",
+                "effective_part_id": FULL_BUILDING_PART_ID,
+                "poly": [[0.0, 3.0, 0.0], [2.0, 3.0, 0.0], [2.0, 3.0, 2.0], [0.0, 3.0, 2.0]],
+            }
+        ],
+        "room_summaries": {},
+        "unresolved_regions": [],
+        "dormers": [],
+    }
+    roof = {
+        "roof_surfaces": {
+            "flat": [
+                {
+                    "story": 0,
+                    "corners": [[0.0, 3.0, 0.0], [4.0, 3.0, 0.0], [4.0, 3.0, 2.0], [0.0, 3.0, 2.0]],
+                    "surface_kind": "flat",
+                    "boundary_face_id": "face:roof-flat:0",
+                    "roof_hypothesis_id": "roof-hypothesis:flat:0",
+                    "flat_role": "roof_flat",
+                }
+            ],
+            "oblique": [],
+        }
+    }
+
+    payloads = _build_ontology_part_payloads(
+        uuid="test-uuid",
+        summary=summary,
+        part_graph_room_ids={FULL_BUILDING_PART_ID: set()},
+        topology_cell_complex={"cells": []},
+        roof_cell_complex={"cells": [], "knee_walls": []},
+        occupied_room_cell_complex={"cells": []},
+        building={"rooms": []},
+        roof=roof,
+    )
+
+    payload = payloads[FULL_BUILDING_PART_ID]
+    roof_surfaces = [surface for surface in payload["renderable_surfaces"] if surface["category"] == "exterior_roof"]
+    assert roof_surfaces == []
+
+
+def test_viewer_ontology_part_payloads_replace_room_flat_fallback_with_room_atoms() -> None:
+    summary = {
+        "uuid": "test-uuid",
+        "building_parts": [
+            {"id": FULL_BUILDING_PART_ID, "room_ids": ["room:5"], "room_indices": [5], "synthetic": True, "synthetic_role": "full_building"},
+        ],
+        "semantic_atoms": [
+            {
+                "id": "atom:flat:room:5",
+                "type": "TopBoundaryAtom",
+                "kind": "flat",
+                "flat_role": "roof_flat",
+                "role": "flat_ceiling",
+                "room_id": "room:5",
+                "room_index": 5,
+                "story": 1,
+                "roof_hypothesis_id": "roof-hypothesis:flat:new",
+                "effective_part_id": FULL_BUILDING_PART_ID,
+                "poly": [[0.0, 3.0, 0.0], [2.0, 3.0, 0.0], [2.0, 3.0, 2.0], [0.0, 3.0, 2.0]],
+            }
+        ],
+        "room_summaries": {
+            "room:5": {
+                "has_resolved_roof_relation": False,
+                "covered_by_sloped_roof": False,
+                "partially_covered_by_sloped_roof": False,
+                "strong_perimeter_sloped": False,
+                "strong_knee_wall_signal": False,
+                "has_candidate_attic_relation": False,
+                "has_candidate_upper_void_relation": False,
+                "has_oblique_atom": False,
+                "roof_evidence_score": 0,
+            }
+        },
+        "unresolved_regions": [],
+        "dormers": [],
+    }
+    roof = {
+        "roof_surfaces": {
+            "flat": [
+                {
+                    "story": 1,
+                    "corners": [[-1.0, 3.0, -1.0], [3.0, 3.0, -1.0], [3.0, 3.0, 3.0], [-1.0, 3.0, 3.0]],
+                    "surface_kind": "flat",
+                    "boundary_face_id": "face:roof-flat:legacy-room-5",
+                    "roof_hypothesis_id": "roof-hypothesis:flat:legacy",
+                    "flat_role": "roof_flat",
+                    "room_index": 5,
+                }
+            ],
+            "oblique": [],
+        }
+    }
+
+    payloads = _build_ontology_part_payloads(
+        uuid="test-uuid",
+        summary=summary,
+        part_graph_room_ids={FULL_BUILDING_PART_ID: {"room:5"}},
+        topology_cell_complex={"cells": []},
+        roof_cell_complex={"cells": [], "knee_walls": []},
+        occupied_room_cell_complex={"cells": []},
+        building={"rooms": []},
+        roof=roof,
+    )
+
+    payload = payloads[FULL_BUILDING_PART_ID]
+    roof_surfaces = [surface for surface in payload["renderable_surfaces"] if surface["category"] == "exterior_roof"]
+    assert len(roof_surfaces) == 1
+    assert roof_surfaces[0]["source_kind"] == "roof_atom_patch"
+    assert roof_surfaces[0]["source_id"] == "atom:flat:room:5"
+    assert roof_surfaces[0]["roof_hypothesis_id"] == "roof-hypothesis:flat:new"
+    assert payload["metadata"]["roof_exact_flat_surface_count"] == 1
+    assert payload["metadata"]["roof_fallback_surface_count"] == 0
+    assert payload["metadata"]["unresolved_region_count"] == 0
+
+
+def test_viewer_ontology_part_payloads_reject_roomless_flat_fallback_without_exact_atoms() -> None:
+    summary = {
+        "uuid": "test-uuid",
+        "building_parts": [
+            {"id": FULL_BUILDING_PART_ID, "room_ids": [], "room_indices": [], "synthetic": True, "synthetic_role": "full_building"},
+        ],
+        "semantic_atoms": [],
+        "room_summaries": {},
+        "unresolved_regions": [],
+        "dormers": [],
+    }
+    roof = {
+        "roof_surfaces": {
+            "flat": [
+                {
+                    "story": 0,
+                    "corners": [[0.0, 3.0, 0.0], [4.0, 3.0, 0.0], [4.0, 3.0, 2.0], [0.0, 3.0, 2.0]],
+                    "surface_kind": "flat",
+                    "boundary_face_id": "face:roof-flat:0",
+                    "roof_hypothesis_id": "roof-hypothesis:flat:0",
+                    "flat_role": "roof_flat",
+                }
+            ],
+            "oblique": [],
+        }
+    }
+
+    payloads = _build_ontology_part_payloads(
+        uuid="test-uuid",
+        summary=summary,
+        part_graph_room_ids={FULL_BUILDING_PART_ID: set()},
+        topology_cell_complex={"cells": []},
+        roof_cell_complex={"cells": [], "knee_walls": []},
+        occupied_room_cell_complex={"cells": []},
+        building={"rooms": []},
+        roof=roof,
+    )
+
+    payload = payloads[FULL_BUILDING_PART_ID]
+    assert [surface["category"] for surface in payload["renderable_surfaces"]].count("exterior_roof") == 0
+    assert [surface["category"] for surface in payload["renderable_surfaces"]].count("unresolved_region") == 0
+    assert payload["metadata"]["roof_exact_flat_surface_count"] == 0
+    assert payload["metadata"]["roof_fallback_surface_count"] == 0
+    assert payload["metadata"]["unresolved_region_count"] == 0
+
+
+def test_viewer_ontology_part_payloads_suppress_roomless_fallback_when_hypothesis_has_exact_cells() -> None:
+    summary = {
+        "uuid": "test-uuid",
+        "building_parts": [
+            {"id": FULL_BUILDING_PART_ID, "room_ids": ["room:1", "room:2"], "room_indices": [1, 2], "synthetic": True, "synthetic_role": "full_building"},
+        ],
+        "room_summaries": {},
+        "unresolved_regions": [],
+        "dormers": [],
+    }
+    roof = {
+        "roof_surfaces": {
+            "flat": [],
+            "oblique": [
+                {
+                    "story": 0,
+                    "corners": [[0.0, 3.0, 0.0], [4.0, 3.8, 0.0], [4.0, 3.8, 2.0], [0.0, 3.0, 2.0]],
+                    "surface_kind": "oblique",
+                    "boundary_face_id": "face:roof-oblique:0",
+                    "roof_hypothesis_id": "roof-hypothesis:oblique:0",
+                }
+            ],
+        }
+    }
+    roof_cell_complex = {
+        "cells": [
+            {
+                "id": "roof-cell:0",
+                "room_id": "room:1",
+                "room_index": 1,
+                "part_id": FULL_BUILDING_PART_ID,
+                "roof_hypothesis_id": "roof-hypothesis:oblique:0",
+                "cell_kind": "attic",
+                "faces": [
+                    {
+                        "id": "f:roof:0",
+                        "role": "roof",
+                        "corners": [[0.0, 3.0, 0.0], [2.0, 3.4, 0.0], [2.0, 3.4, 2.0], [0.0, 3.0, 2.0]],
+                    }
+                ],
+            }
+        ],
+        "knee_walls": [],
+    }
+
+    payloads = _build_ontology_part_payloads(
+        uuid="test-uuid",
+        summary=summary,
+        part_graph_room_ids={FULL_BUILDING_PART_ID: set()},
+        topology_cell_complex={"cells": []},
+        roof_cell_complex=roof_cell_complex,
+        occupied_room_cell_complex={"cells": []},
+        building={"rooms": []},
+        roof=roof,
+    )
+
+    payload = payloads[FULL_BUILDING_PART_ID]
+    roof_surfaces = [surface for surface in payload["renderable_surfaces"] if surface["category"] == "exterior_roof"]
+    assert len(roof_surfaces) == 1
+    assert roof_surfaces[0]["source_kind"] == "roof_cell_face"
+    assert payload["metadata"]["roof_fallback_surface_count"] == 0
+    assert payload["metadata"]["unresolved_region_count"] == 0
+
+
+def test_viewer_ontology_part_payloads_skip_roomless_ambiguous_flat_surfaces() -> None:
+    summary = {
+        "uuid": "test-uuid",
+        "building_parts": [
+            {"id": FULL_BUILDING_PART_ID, "room_ids": [], "room_indices": [], "synthetic": True, "synthetic_role": "full_building"},
+        ],
+        "room_summaries": {},
+        "unresolved_regions": [],
+        "dormers": [],
+    }
+    roof = {
+        "roof_surfaces": {
+            "flat": [
+                {
+                    "story": 0,
+                    "corners": [[0.0, 3.0, 0.0], [4.0, 3.0, 0.0], [4.0, 3.0, 4.0], [0.0, 3.0, 4.0]],
+                    "surface_kind": "flat",
+                    "boundary_face_id": "face:flat:ambiguous",
+                    "roof_hypothesis_id": "roof-hypothesis:flat:0",
+                    "flat_role": "ambiguous_flat_over_sloped_part",
+                }
+            ],
+            "oblique": [],
+        }
+    }
+
+    payloads = _build_ontology_part_payloads(
+        uuid="test-uuid",
+        summary=summary,
+        part_graph_room_ids={FULL_BUILDING_PART_ID: set()},
+        topology_cell_complex={"cells": []},
+        roof_cell_complex={"cells": [], "knee_walls": []},
+        occupied_room_cell_complex={"cells": []},
+        building={"rooms": []},
+        roof=roof,
+    )
+
+    payload = payloads[FULL_BUILDING_PART_ID]
+    assert [surface["category"] for surface in payload["renderable_surfaces"]].count("exterior_roof") == 0
+    assert payload["metadata"]["roof_exact_flat_surface_count"] == 0
+    assert payload["metadata"]["roof_fallback_surface_count"] == 0
+    assert payload["metadata"]["unresolved_region_count"] == 0
