@@ -4,7 +4,7 @@ import math
 from collections import defaultdict
 
 import numpy as np
-from shapely.geometry import MultiPolygon, Point, Polygon
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 from shapely.ops import unary_union
 from shapely.validation import make_valid
 
@@ -72,35 +72,121 @@ def _wall_xz_normal(corners):
     return (-dz / length, dx / length)
 
 
-def _is_wall_covered_by_winner(wall, winner_walls, max_dist=0.5, max_angle_deg=30.0):
-    corners = wall.get("corners", [])
+def _wall_base_segment_xz(corners):
     if len(corners) < 2:
-        return True
+        return None
+    start = (float(corners[0][0]), float(corners[0][2]))
+    end = (float(corners[1][0]), float(corners[1][2]))
+    if math.hypot(end[0] - start[0], end[1] - start[1]) < 1e-6:
+        return None
+    return LineString([start, end])
 
-    midpoint = element_xz_midpoint(corners)
-    normal = _wall_xz_normal(corners)
-    if midpoint is None or normal is None:
-        return True
+
+def _wall_segment_overlap_with_region(wall, region_poly, buffer=0.15):
+    if region_poly is None or region_poly.is_empty:
+        return 0.0, None
+    segment = _wall_base_segment_xz(wall.get("corners", []))
+    if segment is None:
+        return 0.0, None
+    clipped = segment.intersection(region_poly.buffer(buffer))
+    if clipped.is_empty:
+        return 0.0, None
+    return float(clipped.length), clipped
+
+
+def _project_line_interval(line, origin, direction):
+    coords = []
+    if getattr(line, "geom_type", "") == "LineString":
+        coords = list(line.coords)
+    else:
+        for geom in getattr(line, "geoms", []):
+            if getattr(geom, "geom_type", "") == "LineString":
+                coords.extend(list(geom.coords))
+    if not coords:
+        raise ValueError("line geometry has no coordinate sequence")
+    ts = [
+        (coord[0] - origin[0]) * direction[0] + (coord[1] - origin[1]) * direction[1]
+        for coord in coords
+    ]
+    return min(ts), max(ts)
+
+
+def _winner_wall_covers_overlap_segment(
+    wall,
+    winner_walls,
+    overlap_poly,
+    *,
+    buffer=0.15,
+    max_offset_m=0.2,
+    max_angle_deg=12.0,
+    min_overlap_fraction=0.35,
+):
+    wall_segment = _wall_base_segment_xz(wall.get("corners", []))
+    if wall_segment is None:
+        return True, {"reason": "invalid_loser_segment"}
+
+    overlap_len, overlap_segment = _wall_segment_overlap_with_region(
+        wall, overlap_poly, buffer=buffer
+    )
+    if overlap_segment is None or overlap_len <= 1e-6:
+        return False, {
+            "reason": "no_overlap_segment",
+            "overlap_length_m": round(overlap_len, 6),
+        }
+
+    direction = np.array(wall_segment.coords[1]) - np.array(wall_segment.coords[0])
+    segment_length = float(np.linalg.norm(direction))
+    if segment_length <= 1e-6:
+        return True, {"reason": "degenerate_loser_segment"}
+    unit_dir = direction / segment_length
+    origin = np.array(wall_segment.coords[0], dtype=float)
+    target_start, target_end = _project_line_interval(overlap_segment, origin, unit_dir)
+    target_length = max(target_end - target_start, 0.0)
+    if target_length <= 1e-6:
+        return False, {
+            "reason": "zero_target_interval",
+            "overlap_length_m": round(overlap_len, 6),
+        }
+
+    best = {
+        "reason": "no_winner_match",
+        "overlap_length_m": round(overlap_len, 6),
+        "best_fraction": 0.0,
+        "best_offset_m": None,
+        "best_angle_deg": None,
+    }
+    loser_normal = _wall_xz_normal(wall.get("corners", []))
 
     for winner_wall in winner_walls:
-        winner_corners = winner_wall.get("corners", [])
-        if len(winner_corners) < 2:
+        winner_segment = _wall_base_segment_xz(winner_wall.get("corners", []))
+        if winner_segment is None:
             continue
-        winner_mid = element_xz_midpoint(winner_corners)
-        winner_normal = _wall_xz_normal(winner_corners)
-        if winner_mid is None or winner_normal is None:
+        winner_normal = _wall_xz_normal(winner_wall.get("corners", []))
+        if loser_normal is None or winner_normal is None:
             continue
-
-        dist = math.hypot(midpoint[0] - winner_mid[0], midpoint[1] - winner_mid[1])
-        if dist > max_dist:
-            continue
-
-        dot = abs(normal[0] * winner_normal[0] + normal[1] * winner_normal[1])
+        dot = abs(loser_normal[0] * winner_normal[0] + loser_normal[1] * winner_normal[1])
         angle_deg = math.degrees(math.acos(min(dot, 1.0)))
-        if angle_deg <= max_angle_deg:
-            return True
+        if angle_deg > max_angle_deg:
+            continue
+        offset_m = float(winner_segment.distance(overlap_segment))
+        if offset_m > max_offset_m:
+            continue
 
-    return False
+        winner_start, winner_end = _project_line_interval(winner_segment, origin, unit_dir)
+        projected_overlap = max(0.0, min(target_end, winner_end) - max(target_start, winner_start))
+        overlap_fraction = projected_overlap / target_length if target_length > 1e-6 else 0.0
+        if overlap_fraction > best["best_fraction"]:
+            best = {
+                "reason": "winner_match",
+                "overlap_length_m": round(overlap_len, 6),
+                "best_fraction": round(overlap_fraction, 6),
+                "best_offset_m": round(offset_m, 6),
+                "best_angle_deg": round(angle_deg, 6),
+            }
+        if overlap_fraction >= min_overlap_fraction:
+            return True, best
+
+    return False, best
 
 
 def _graph_overlap_priorities(rooms_out, graph) -> dict[int, tuple[int, float]]:
@@ -194,9 +280,25 @@ def clip_floor_overlaps(rooms_out, graph=None):
                 clipped = Polygon()
 
             overlap_for_test = make_valid(unary_union(decompose_polys(overlap)))
-            candidate_removed_walls, kept_walls = _elements_in_overlap(
-                rooms_out[room_index]["walls_computed"], overlap_for_test
-            )
+            removed_region = make_valid(poly.difference(clipped))
+            candidate_removed_walls = []
+            kept_walls = []
+            wall_decisions = []
+            for wall in rooms_out[room_index]["walls_computed"]:
+                overlap_len, _ = _wall_segment_overlap_with_region(
+                    wall, removed_region, buffer=0.15
+                )
+                if overlap_len > 1e-6:
+                    candidate_removed_walls.append(wall)
+                    wall_decisions.append(
+                        {
+                            "wall_id": wall.get("id"),
+                            "candidate_overlap_length_m": round(overlap_len, 6),
+                            "decision": "candidate",
+                        }
+                    )
+                else:
+                    kept_walls.append(wall)
             removed_doors, kept_doors = _elements_in_overlap(
                 rooms_out[room_index].get("doors", []), overlap_for_test
             )
@@ -206,18 +308,42 @@ def clip_floor_overlaps(rooms_out, graph=None):
 
             winner_walls = []
             for winner_room_index, winner_poly in story_claim_order[story]:
-                if winner_poly.intersects(overlap_for_test):
+                if winner_poly.intersects(removed_region.buffer(0.15)):
                     winner_walls.extend(rooms_out[winner_room_index]["walls_computed"])
 
             removed_walls = []
             for wall in candidate_removed_walls:
-                if _is_wall_covered_by_winner(wall, winner_walls):
+                covered, detail = _winner_wall_covers_overlap_segment(
+                    wall, winner_walls, removed_region
+                )
+                if covered:
                     removed_walls.append(wall)
+                    record(
+                        wall,
+                        STEP_CLIP_FLOOR_OVERLAPS,
+                        "removed",
+                        (
+                            "removed_region_overlap="
+                            f"{detail.get('overlap_length_m', 0.0):.3f}m "
+                            f"winner_overlap_fraction={detail.get('best_fraction', 0.0):.3f}"
+                        ),
+                    )
+                    wall_decisions.append(
+                        {
+                            "wall_id": wall.get("id"),
+                            "decision": "removed",
+                            **detail,
+                        }
+                    )
                 else:
                     kept_walls.append(wall)
-
-            for wall in removed_walls:
-                record(wall, STEP_CLIP_FLOOR_OVERLAPS, "removed", "overlap region")
+                    wall_decisions.append(
+                        {
+                            "wall_id": wall.get("id"),
+                            "decision": "kept",
+                            **detail,
+                        }
+                    )
             rooms_out[room_index]["walls_computed"] = kept_walls
             rooms_out[room_index]["walls_removed_overlap"] = removed_walls
             rooms_out[room_index]["doors"] = kept_doors
@@ -269,6 +395,7 @@ def clip_floor_overlaps(rooms_out, graph=None):
                     "clipped_area_m2": round(clipped.area, 3),
                     "overlap_area_m2": round(overlap.area, 3),
                     "walls_removed": len(removed_walls),
+                    "wall_decisions": wall_decisions,
                     "doors_transferred": len(removed_doors),
                     "windows_transferred": len(removed_windows),
                 }
@@ -358,12 +485,28 @@ def clip_walls_to_story_bounds(rooms_out, story_y_map):
             continue
 
         floor_polygon = room["floor_polygon"]
+        room_floor_y = None
         if floor_polygon and len(floor_polygon) >= 3:
             room_floor_y = float(np.mean([corner[1] for corner in floor_polygon]))
             if abs(room_floor_y - story_y_map[story]) > max_half_floor:
                 continue
 
         floor_y, ceiling_y = story_bounds[story]
+
+        # Split-level opt-out: if the room's own floor polygon agrees with its
+        # walls' minimum y, this room is an extension at its own elevation (e.g.
+        # sunroom or garage step-down). Trust the room over the story aggregate
+        # for the bottom-clip baseline. Ceiling baseline stays on the story.
+        effective_floor_y = floor_y
+        if room_floor_y is not None:
+            wall_bottoms = [
+                min(c[1] for c in w["corners"])
+                for w in room["walls_computed"]
+                if len(w.get("corners") or []) >= 3
+            ]
+            if wall_bottoms and abs(room_floor_y - min(wall_bottoms)) <= 0.10:
+                effective_floor_y = room_floor_y
+
         for wall in room["walls_computed"]:
             walls_checked += 1
             corners = wall["corners"]
@@ -375,7 +518,7 @@ def clip_walls_to_story_bounds(rooms_out, story_y_map):
             wall_max_y = max(ys)
             need_clip = (
                 ceiling_y is not None and wall_max_y > ceiling_y + top_epsilon
-            ) or (wall_min_y < floor_y - bottom_tol)
+            ) or (wall_min_y < effective_floor_y - bottom_tol)
             if not need_clip:
                 continue
 
@@ -385,10 +528,10 @@ def clip_walls_to_story_bounds(rooms_out, story_y_map):
                     if corner[1] > ceiling_y:
                         corner[1] = ceiling_y
 
-            if wall_min_y < floor_y - bottom_tol:
+            if wall_min_y < effective_floor_y - bottom_tol:
                 for corner in new_corners:
-                    if corner[1] < floor_y:
-                        corner[1] = floor_y
+                    if corner[1] < effective_floor_y:
+                        corner[1] = effective_floor_y
 
             wall["corners_original"] = corners
             wall["corners"] = new_corners
@@ -398,7 +541,7 @@ def clip_walls_to_story_bounds(rooms_out, story_y_map):
                 STEP_CLIP_WALLS_STORY,
                 "modified",
                 f"y: [{wall_min_y:.2f},{wall_max_y:.2f}]"
-                f" -> [{floor_y:.2f},{ceiling_y}]",
+                f" -> [{effective_floor_y:.2f},{ceiling_y}]",
             )
             walls_clipped += 1
 

@@ -5,9 +5,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from time import perf_counter
 
-from reconcile.viewer_server import FULL_BUILDING_PART_ID
-
 from audit_full_model_payloads import _area_metrics, _build_payload
+
+from reconcile.viewer_server import FULL_BUILDING_PART_ID
 
 
 def _classify_failure_mode(
@@ -93,7 +93,7 @@ def main() -> None:
                 and isinstance(surface.get("room_index"), int)
             }
         )
-        exposed_room_count = len(((roof.get("ceiling") or {}).get("exposed_rooms") or []))
+        exposed_room_count = len((roof.get("ceiling") or {}).get("exposed_rooms") or [])
         room_summaries = top_boundary_graph.get("room_summaries") or {}
         resolved_room_count = sum(
             1 for value in room_summaries.values() if isinstance(value, dict) and value.get("has_resolved_roof_relation")
@@ -137,11 +137,11 @@ def main() -> None:
         "building_count": len(results),
         "failure_mode_counts": dict(sorted(bucket_counts.items())),
         "avg_semantic_ceiling_overlap_ratio_vs_heuristic": round(
-            sum(float((row["area_metrics"].get("semantic_ceiling_overlap_ratio_vs_heuristic") or 0.0)) for row in results) / len(results),
+            sum(float(row["area_metrics"].get("semantic_ceiling_overlap_ratio_vs_heuristic") or 0.0) for row in results) / len(results),
             6,
         ) if results else None,
         "avg_shell_ceiling_overlap_ratio_vs_heuristic": round(
-            sum(float((row["area_metrics"].get("shell_ceiling_overlap_ratio_vs_heuristic") or 0.0)) for row in results) / len(results),
+            sum(float(row["area_metrics"].get("shell_ceiling_overlap_ratio_vs_heuristic") or 0.0) for row in results) / len(results),
             6,
         ) if results else None,
     }

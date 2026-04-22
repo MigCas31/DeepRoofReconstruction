@@ -34,6 +34,22 @@ def build_top_boundary_graph(
     edges: list[dict[str, Any]] = []
     room_summaries: dict[str, dict[str, Any]] = {}
     node_ids: set[str] = set()
+
+    # P1b: pre-compute which building parts contain at least one room with an
+    # oblique partition atom. Used downstream as an adjacency signal: when a
+    # room has strong perimeter-slope evidence but no local oblique atom, the
+    # presence of oblique evidence elsewhere in the same roof-topology
+    # building part is a reason to avoid a committed attic classification.
+    # This is a classification signal, not geometric propagation — hypothesis
+    # polygons are left untouched.
+    part_has_oblique_atom: dict[str, bool] = defaultdict(bool)
+    for room_partition in room_partitions:
+        room_id = _room_key(int(room_partition["room_index"]))
+        if not any(p.get("kind") == "oblique" for p in room_partition.get("partitions") or []):
+            continue
+        for part_id in room_membership.get(room_id, []):
+            part_has_oblique_atom[part_id] = True
+
     exact_cells = (roof_cell_complex or {}).get("cells") or []
     exact_edges = (roof_cell_complex or {}).get("edges") or []
     exact_cells_by_id = {
@@ -67,6 +83,19 @@ def build_top_boundary_graph(
         room_evidence = evidence_by_room.get(room_id) or {}
         atom_roles: list[str] = []
         has_oblique_atom = any(partition.get("kind") == "oblique" for partition in room_partition.get("partitions") or [])
+        # Pre-compute room-level sloped coverage for P1a attic demotion rule below.
+        room_covered_by_sloped_roof = any(
+            str((coverage_by_atom.get(str(partition.get("id"))) or {}).get("sloped_state", "none")) == "confirmed"
+            for partition in room_partition.get("partitions") or []
+        )
+        room_strong_perimeter_sloped = bool(room_evidence.get("strong_perimeter_sloped"))
+        room_roof_evidence_score = int(room_evidence.get("evidence_score", 0) or 0)
+        # P1b signal: another room in one of this room's building parts has an
+        # oblique partition atom. Treat as adjacency evidence that the local
+        # flat classification should not commit to attic.
+        same_part_has_oblique_atom = any(
+            part_has_oblique_atom.get(part_id, False) for part_id in room_part_ids
+        )
 
         for partition in room_partition.get("partitions") or []:
             atom_id = str(partition["id"])
@@ -112,8 +141,49 @@ def build_top_boundary_graph(
                         )
                     )
                 ):
-                    role = "attic_floor_inferred"
-                    reason = "evidence_supported_attic_without_exact_cell"
+                    # P1a: when the room has strong sloped evidence (coverage
+                    # confirmed + perimeter sloped + evidence_score >= 5) and
+                    # there is no exact attic cell above this atom, the attic
+                    # inference rests only on strong_attic_context — which is
+                    # unreliable under committed room-level slope signals.
+                    # Demote to `attic_floor_candidate` rather than committing
+                    # an attic_floor interpretation over slope evidence. The
+                    # atom-level `flat_cap_under_slope` is *consistent with*
+                    # habitable-under-slope (the flat sits below a gable
+                    # ceiling), so it must not veto this demotion.
+                    #
+                    # P1b extends demotion: a same-part neighbour with an
+                    # oblique atom plus local strong_perimeter_sloped points
+                    # to habitable-under-slope captured in the adjacent room.
+                    # Both `flat_cap_under_slope` and `strong_attic_context`
+                    # are equally consistent with habitable-under-slope at
+                    # this point in the branch (we're already in the
+                    # `attic_floor_inferred` arm because no exact attic cell
+                    # above the atom), so neither vetoes demotion — the
+                    # `not cell_kinds` outer gate preserves trust in the
+                    # exact kinetic cell complex.
+                    p1a_strong_slope_demote = (
+                        room_covered_by_sloped_roof
+                        and room_strong_perimeter_sloped
+                        and room_roof_evidence_score >= 5
+                    )
+                    p1b_neighbour_oblique_demote = (
+                        same_part_has_oblique_atom
+                        and room_strong_perimeter_sloped
+                    )
+                    if (
+                        (p1a_strong_slope_demote or p1b_neighbour_oblique_demote)
+                        and not cell_kinds
+                    ):
+                        role = "attic_floor_candidate"
+                        reason = (
+                            "attic_inferred_demoted_same_part_oblique_neighbour"
+                            if p1b_neighbour_oblique_demote and not p1a_strong_slope_demote
+                            else "attic_inferred_demoted_strong_slope_without_exact_cell"
+                        )
+                    else:
+                        role = "attic_floor_inferred"
+                        reason = "evidence_supported_attic_without_exact_cell"
                 elif sloped_state in {"confirmed", "partial"}:
                     if has_oblique_atom:
                         role = "flat_transition_cap_candidate"
@@ -297,6 +367,7 @@ def build_top_boundary_graph(
             "strong_knee_wall_signal": bool(room_evidence.get("strong_knee_wall_signal")),
             "strong_gable_context": bool(room_evidence.get("strong_gable_context")),
             "roof_evidence_score": int(room_evidence.get("evidence_score", 0) or 0),
+            "same_part_has_oblique_atom": same_part_has_oblique_atom,
         }
         room_summaries[room_id]["has_resolved_roof_relation"] = bool(
             room_summaries[room_id]["has_attic_relation"]

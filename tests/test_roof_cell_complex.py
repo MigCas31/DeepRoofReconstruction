@@ -10,7 +10,9 @@ from reconcile.roof_algorithms_py.occupied_room_cell_complex import (
     _merged_partition_regions,
     build_occupied_room_cell_complex,
 )
-from reconcile.roof_algorithms_py.roof_arrangement_kernel import build_arranged_polyhedral_cell
+from reconcile.roof_algorithms_py.roof_arrangement_kernel import (
+    build_arranged_polyhedral_cell,
+)
 from reconcile.roof_algorithms_py.roof_cell_complex import (
     _poly_xz_from_3d,
     build_roof_cell_complex,

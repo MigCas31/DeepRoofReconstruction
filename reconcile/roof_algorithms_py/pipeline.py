@@ -21,8 +21,10 @@ from .roof_building_parts import (
     classify_selected_flat_hypothesis_roles,
     refine_building_part_graph,
 )
-from .roof_cell_complex import build_roof_cell_complex
-from .roof_cell_complex import filter_knee_walls_by_occupied_shell
+from .roof_cell_complex import (
+    build_roof_cell_complex,
+    filter_knee_walls_by_occupied_shell,
+)
 from .roof_coverage_graph import build_roof_coverage_graph
 from .roof_envelope_continuation import continue_roof_envelopes
 from .roof_evidence_graph import (
@@ -34,7 +36,10 @@ from .roof_hypothesis_graph import (
     build_roof_hypothesis_graph,
     select_roof_surfaces_from_hypotheses,
 )
-from .roof_partitioning import derive_room_ceiling_partitions, inject_simple_slant_partitions
+from .roof_partitioning import (
+    derive_room_ceiling_partitions,
+    inject_simple_slant_partitions,
+)
 from .segment_collection import collect_oblique_segments
 from .simple_slant import identify_simple_slant_rooms
 from .steps import ROOF_PIPELINE_STEPS
@@ -301,6 +306,8 @@ def run_roof_algorithms(bldg: dict, graph=None) -> dict:
         story_floor_y=story_stats["story_floor_y"],
         story_floor_regions=story_stats["story_floor_regions"],
         dormers=dormers_out,
+        gap_walls=bldg.get("gap_walls", []),
+        rooms=bldg.get("rooms", []),
     )
 
     return {

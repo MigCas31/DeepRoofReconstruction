@@ -5,6 +5,88 @@ import math
 import numpy as np
 
 
+def reassign_raw_ceiling_planes_spatially(rooms_out):
+    """Move each raw ceiling plane to the room whose floor it actually sits over.
+
+    The per-room SVD matches a raw ceiling *file* to the best merged room via
+    shared wall IDs, but Apple RoomPlan's captured ceiling mesh can span
+    multiple rooms — a vaulted hallway, a shared pitched attic, etc. Without a
+    spatial reassignment, every plane in the file lands on the single keyed
+    room, which visually bleeds neighbouring rooms' ceilings onto the wrong
+    footprint.
+
+    For each plane, take its XZ centroid and pick the room (same story,
+    building-local) whose floor polygon contains it. If no floor contains the
+    centroid, fall back to the room with the largest 2D overlap with the plane.
+    If nothing matches at all (should be rare — scan mesh drifting beyond every
+    modelled room), keep the plane where it was so we don't silently drop data.
+    """
+    try:
+        from shapely.geometry import Point, Polygon
+    except ImportError:
+        return
+
+    room_polys = []
+    for room in rooms_out:
+        fp = room.get("floor_polygon") or []
+        if len(fp) < 3:
+            room_polys.append(None)
+            continue
+        try:
+            poly = Polygon([(c[0], c[2]) for c in fp])
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            room_polys.append(poly if poly.is_valid and not poly.is_empty else None)
+        except Exception:
+            room_polys.append(None)
+
+    reassignments = [[] for _ in rooms_out]
+    for src_idx, room in enumerate(rooms_out):
+        src_story = room.get("story", 0)
+        for plane in room.get("raw_ceiling_planes") or []:
+            corners = plane.get("corners") or []
+            if len(corners) < 3:
+                reassignments[src_idx].append(plane)
+                continue
+            xs = [c[0] for c in corners]
+            zs = [c[2] for c in corners]
+            cx = sum(xs) / len(xs)
+            cz = sum(zs) / len(zs)
+            target_idx = None
+            centroid = Point(cx, cz)
+            for ridx, poly in enumerate(room_polys):
+                if poly is None or rooms_out[ridx].get("story", 0) != src_story:
+                    continue
+                if poly.contains(centroid):
+                    target_idx = ridx
+                    break
+            if target_idx is None:
+                try:
+                    plane_poly = Polygon([(c[0], c[2]) for c in corners])
+                    if not plane_poly.is_valid:
+                        plane_poly = plane_poly.buffer(0)
+                except Exception:
+                    plane_poly = None
+                if plane_poly is not None and plane_poly.is_valid and not plane_poly.is_empty:
+                    best_area = 0.0
+                    for ridx, poly in enumerate(room_polys):
+                        if poly is None or rooms_out[ridx].get("story", 0) != src_story:
+                            continue
+                        try:
+                            inter = poly.intersection(plane_poly).area
+                        except Exception:
+                            inter = 0.0
+                        if inter > best_area:
+                            best_area = inter
+                            target_idx = ridx
+            if target_idx is None:
+                target_idx = src_idx
+            reassignments[target_idx].append(plane)
+
+    for ridx, room in enumerate(rooms_out):
+        room["raw_ceiling_planes"] = reassignments[ridx]
+
+
 def extend_wall_to_slab(corners, slab_y_above, epsilon=0.05, max_gap=0.80):
     if len(corners) < 3:
         return None
@@ -251,6 +333,284 @@ def find_closest_slab_y(wall_corners, slabs_above):
     best_y = None
     for slab_x, slab_z, slab_y in slabs_above:
         dist = math.hypot(wall_x - slab_x, wall_z - slab_z)
+        if dist < best_dist:
+            best_dist = dist
+            best_y = slab_y
+    return best_y
+
+
+COHORT_TOLERANCE_M = 0.15
+MIN_COHORT_COVERAGE = 0.70
+MAX_OUTLIER_SPAN_FRAC = 0.25
+MAX_DOMINANT_DELTA_M = 0.40
+MIN_DOMINANT_DELTA_M = 0.10
+FLOOR_MATCH_TOLERANCE_M = 0.10
+COLINEAR_ANGLE_DEG = 8.0
+COLINEAR_OFFSET_M = 0.15
+COLINEAR_GAP_M = 0.80
+
+
+def _wall_bottom_chord_xz(corners):
+    """Return the longest chord among bottom corners as (p0, p1, length).
+
+    Robust to non-canonical walls (5+ corners, arbitrary ordering) — selects
+    corners within 1 cm of min(y) and picks the widest pair in XZ.
+    """
+    if len(corners) < 2:
+        return None
+    ys = [c[1] for c in corners]
+    min_y = min(ys)
+    bot = [c for c in corners if c[1] < min_y + 0.01]
+    if len(bot) < 2:
+        return None
+    best_len = 0.0
+    best_pair = None
+    for i in range(len(bot)):
+        for j in range(i + 1, len(bot)):
+            dx = bot[i][0] - bot[j][0]
+            dz = bot[i][2] - bot[j][2]
+            d = math.hypot(dx, dz)
+            if d > best_len:
+                best_len = d
+                best_pair = (bot[i], bot[j])
+    if best_pair is None or best_len < 1e-4:
+        return None
+    return best_pair[0], best_pair[1], best_len
+
+
+def _wall_record(corners):
+    """Pre-compute top_y, bot_y, span, axis, mid for a wall — used by the cohort."""
+    chord = _wall_bottom_chord_xz(corners)
+    if chord is None:
+        return None
+    p0, p1, span = chord
+    ys = [c[1] for c in corners]
+    axis = ((p1[0] - p0[0]) / span, (p1[2] - p0[2]) / span)
+    mid = ((p0[0] + p1[0]) * 0.5, (p0[2] + p1[2]) * 0.5)
+    return {
+        "top_y": float(max(ys)),
+        "bot_y": float(min(ys)),
+        "span": float(span),
+        "axis": axis,
+        "mid": mid,
+    }
+
+
+def _weighted_median(items):
+    items = sorted(items, key=lambda t: t[0])
+    total = sum(w for _, w in items)
+    if total <= 0:
+        return items[len(items) // 2][0]
+    half = total / 2.0
+    acc = 0.0
+    for val, w in items:
+        acc += w
+        if acc >= half:
+            return val
+    return items[-1][0]
+
+
+def compute_story_wall_top_cohort(rooms_out, story):
+    """Find the dominant top-Y cohort for walls_computed on the given story.
+
+    Returns None if no single cluster (tolerance ``COHORT_TOLERANCE_M``) covers
+    at least ``MIN_COHORT_COVERAGE`` of the total span-weighted perimeter. The
+    returned dict is the only input the per-wall gates need — it includes
+    pre-computed records for every eligible wall on the story so that the
+    colinearity check does not rebuild them.
+    """
+    records = []
+    for room in rooms_out:
+        if room.get("story", 0) != story:
+            continue
+        for wall in room.get("walls_computed") or []:
+            rec = _wall_record(wall.get("corners") or [])
+            if rec is None or rec["span"] < 0.05 or rec["top_y"] - rec["bot_y"] < 0.10:
+                continue
+            records.append(rec)
+    if not records:
+        return None
+
+    total_perim = sum(r["span"] for r in records)
+    if total_perim <= 0:
+        return None
+
+    sorted_by_top = sorted(records, key=lambda r: r["top_y"])
+    clusters = [[sorted_by_top[0]]]
+    for rec in sorted_by_top[1:]:
+        if rec["top_y"] - clusters[-1][-1]["top_y"] <= COHORT_TOLERANCE_M:
+            clusters[-1].append(rec)
+        else:
+            clusters.append([rec])
+
+    best_cluster = max(
+        clusters,
+        key=lambda cl: sum(r["span"] for r in cl),
+    )
+    best_w = sum(r["span"] for r in best_cluster)
+    coverage = best_w / total_perim
+    if coverage < MIN_COHORT_COVERAGE:
+        return None
+
+    dominant_y = sum(r["top_y"] * r["span"] for r in best_cluster) / best_w
+    cohort_floor_y = _weighted_median(
+        [(r["bot_y"], r["span"]) for r in best_cluster]
+    )
+
+    return {
+        "dominant_y": dominant_y,
+        "coverage_frac": coverage,
+        "total_perimeter": total_perim,
+        "cohort_floor_y": cohort_floor_y,
+        "records": records,
+    }
+
+
+def _is_colinear_neighbour(target_rec, other_rec):
+    ax, az = target_rec["axis"]
+    bx, bz = other_rec["axis"]
+    cos_a = min(1.0, max(-1.0, abs(ax * bx + az * bz)))
+    if math.degrees(math.acos(cos_a)) > COLINEAR_ANGLE_DEG:
+        return False
+    nx, nz = -az, ax
+    tx, tz = target_rec["mid"]
+    ox, oz = other_rec["mid"]
+    perp = abs((ox - tx) * nx + (oz - tz) * nz)
+    if perp > COLINEAR_OFFSET_M:
+        return False
+    along = (ox - tx) * ax + (oz - tz) * az
+    gap = abs(along) - (target_rec["span"] + other_rec["span"]) * 0.5
+    return gap <= COLINEAR_GAP_M
+
+
+def should_extend_wall_to_dominant(corners, cohort):
+    """Return the target top-Y if this wall passes every dominant-height gate.
+
+    Gates applied in order (fast-fail):
+      * wall top-Y is below dominant by at least ``MIN_DOMINANT_DELTA_M``
+        and by no more than ``MAX_DOMINANT_DELTA_M``
+      * wall span is at most ``MAX_OUTLIER_SPAN_FRAC`` of cohort perimeter
+      * wall bottom-Y matches the cohort floor-Y within ``FLOOR_MATCH_TOLERANCE_M``
+      * wall is colinear with at least one dominant-cohort neighbour
+    """
+    if cohort is None:
+        return None
+    rec = _wall_record(corners)
+    if rec is None:
+        return None
+    dominant_y = cohort["dominant_y"]
+    delta = dominant_y - rec["top_y"]
+    if delta < MIN_DOMINANT_DELTA_M or delta > MAX_DOMINANT_DELTA_M:
+        return None
+    if rec["span"] > MAX_OUTLIER_SPAN_FRAC * cohort["total_perimeter"]:
+        return None
+    cohort_floor_y = cohort.get("cohort_floor_y")
+    if cohort_floor_y is None:
+        return None
+    if abs(rec["bot_y"] - cohort_floor_y) > FLOOR_MATCH_TOLERANCE_M:
+        return None
+    for other in cohort["records"]:
+        if other is rec:
+            continue
+        if abs(other["top_y"] - dominant_y) > COHORT_TOLERANCE_M:
+            continue
+        if _is_colinear_neighbour(rec, other):
+            return dominant_y
+    return None
+
+
+def extend_wall_to_dominant(corners, dominant_y, epsilon=0.05):
+    """Lift the wall's top corners to ``dominant_y``.
+
+    Mirrors :func:`extend_wall_to_slab` so the resulting record has the same
+    ``extended_corners``/``extension_strip`` shape the viewer already renders.
+    ``should_extend_wall_to_dominant`` must have already approved the wall —
+    this function performs only the geometric lift.
+    """
+    if len(corners) < 3:
+        return None
+    ys = [c[1] for c in corners]
+    max_y = max(ys)
+    min_y = min(ys)
+    if max_y - min_y < 0.1:
+        return None
+    y_thresh = min_y + (max_y - min_y) * 0.4
+    top_indices = [idx for idx, y in enumerate(ys) if y > y_thresh]
+    if not top_indices:
+        return None
+    need_ext = [idx for idx in top_indices if ys[idx] < dominant_y - epsilon]
+    if not need_ext:
+        return None
+
+    extended = [list(c) for c in corners]
+    need_ext_set = set(need_ext)
+    for idx in need_ext:
+        extended[idx][1] = dominant_y
+
+    extension_strips = []
+    top_sorted = sorted(top_indices)
+    for a in range(len(top_sorted) - 1):
+        i0, i1 = top_sorted[a], top_sorted[a + 1]
+        orig_y0, orig_y1 = corners[i0][1], corners[i1][1]
+        ext_y0 = dominant_y if i0 in need_ext_set else orig_y0
+        ext_y1 = dominant_y if i1 in need_ext_set else orig_y1
+        if abs(ext_y0 - orig_y0) < 1e-4 and abs(ext_y1 - orig_y1) < 1e-4:
+            continue
+        extension_strips.append(
+            [
+                [corners[i0][0], orig_y0, corners[i0][2]],
+                [corners[i1][0], orig_y1, corners[i1][2]],
+                [corners[i1][0], ext_y1, corners[i1][2]],
+                [corners[i0][0], ext_y0, corners[i0][2]],
+            ]
+        )
+    if not extension_strips:
+        return None
+    return {"extended_corners": extended, "extension_strip": extension_strips}
+
+
+def find_best_slab_above(
+    wall_corners,
+    wall_top_y,
+    slabs_above,
+    min_margin=0.05,
+    max_gap=None,
+    stack_tol=0.10,
+):
+    """Pick the slab above whose XZ footprint is spatially closest to the wall midpoint.
+
+    slabs_above: list of (shapely_polygon_xz, floor_y). Polygon coords are (x, z).
+    Returns the chosen slab's floor_y, or None if no slab is strictly above
+    `wall_top_y + min_margin` (and within `max_gap` if provided).
+
+    `max_gap` mirrors `extend_wall_to_slab`'s gate: candidates with
+    `slab_y - wall_top_y > max_gap` are skipped, so the picker can't prefer an
+    unreachable high slab over a closer-but-less-central viable slab.
+
+    `stack_tol` enforces the stacking constraint: only extend a wall when its
+    midpoint sits inside (or within `stack_tol` metres of) an upper-story room
+    floor polygon. Walls whose midpoint is farther than `stack_tol` from every
+    candidate slab are air-facing — the user supplies those thicknesses from
+    the envelope, so no auto-extension is needed. Prevents extensions in
+    detached wings / outbuildings that have no room overhead.
+    """
+    if not slabs_above:
+        return None
+    from shapely.geometry import Point  # local import to keep module load light
+
+    wx = float(np.mean([c[0] for c in wall_corners]))
+    wz = float(np.mean([c[2] for c in wall_corners]))
+    pt = Point(wx, wz)
+    best_dist = float("inf")
+    best_y = None
+    for poly, slab_y in slabs_above:
+        if slab_y <= wall_top_y + min_margin:
+            continue
+        if max_gap is not None and slab_y - wall_top_y > max_gap:
+            continue
+        dist = float(poly.distance(pt))
+        if stack_tol is not None and dist > stack_tol:
+            continue
         if dist < best_dist:
             best_dist = dist
             best_y = slab_y

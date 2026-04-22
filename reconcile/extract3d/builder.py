@@ -4,12 +4,21 @@ import json
 from collections import defaultdict
 
 import numpy as np
+from shapely.geometry import Polygon
 
 from reconcile_v2.graph_builder import (
     build_topology_graph as build_enriched_topology_graph,
 )
 
-from .ceilings import extend_wall_to_slab, find_closest_slab_y, infer_ceilings
+from .ceilings import (
+    compute_story_wall_top_cohort,
+    extend_wall_to_dominant,
+    extend_wall_to_slab,
+    find_best_slab_above,
+    infer_ceilings,
+    reassign_raw_ceiling_planes_spatially,
+    should_extend_wall_to_dominant,
+)
 from .common import (
     clamp_opening_to_parent,
     corners_to_world,
@@ -20,6 +29,7 @@ from .exterior import compute_gap_closures, detect_exterior_gap_indicators
 from .gaps import assign_gaps_to_rooms, compute_cross_floor_gaps, compute_gap_walls
 from .lineage import (
     STEP_DEDUP_WALLS,
+    STEP_EXTEND_WALL_DOMINANT,
     STEP_EXTEND_WALL_SLAB,
     STEP_EXTRACT_OPENINGS,
     STEP_EXTRACT_STORAGES,
@@ -31,9 +41,11 @@ from .overlaps import clip_floor_overlaps, clip_walls_to_story_bounds
 from .scan_data import (
     build_merged_id_sets,
     build_raw_indices,
+    build_raw_to_merged_index,
     compute_room_transforms,
     find_merged_path,
     find_scan_cache_dir,
+    load_raw_ceilings,
     load_raw_rooms,
     parse_address_from_scan_dir,
 )
@@ -75,6 +87,35 @@ def _compute_room_stories(merged):
         room_stories.append(story_map[closest_y])
 
     return room_stories, story + 1
+
+
+def _is_split_level(rooms_out):
+    """Flag buildings that contain a half-floor or atypically-spaced stories.
+
+    A half-floor shows up as either a story with a single room (side-wing or
+    mezzanine appendage), or a story-to-story floor-Y delta noticeably below a
+    typical full-story height (~2.4 m). Used for downstream filtering only;
+    the wall-extension fix itself does not depend on this flag.
+    """
+    rooms_per_story = {}
+    for room in rooms_out:
+        rooms_per_story[room["story"]] = rooms_per_story.get(room["story"], 0) + 1
+    if len(rooms_per_story) < 2:
+        return False
+    if any(c == 1 for c in rooms_per_story.values()):
+        return True
+    floor_y_by_story = {}
+    for room in rooms_out:
+        fp = room.get("floor_polygon") or []
+        if not fp:
+            continue
+        floor_y_by_story.setdefault(room["story"], []).append(
+            float(np.mean([c[1] for c in fp]))
+        )
+    mean_y = {s: float(np.mean(ys)) for s, ys in floor_y_by_story.items() if ys}
+    ordered = sorted(mean_y)
+    deltas = [mean_y[ordered[i + 1]] - mean_y[ordered[i]] for i in range(len(ordered) - 1)]
+    return any(d < 2.0 for d in deltas)
 
 
 def _raw_room_matches_merged(raw_room, merged_room):
@@ -384,6 +425,46 @@ def _apply_opening_clamps(rooms_out):
                     )
 
 
+def _merge_ceilings_by_room(raw_ceilings, raw_to_merged, raw_transforms):
+    """Group ceiling planes per merged-room index, remapping into merged space.
+
+    For each raw room that matched a merged room (via wall-id overlap), take its
+    ceiling planes, transform each to raw-session-world via the plane's own
+    transform, then apply the SVD `(rot, trans)` computed for that raw room so
+    the output sits in the merged-building coordinate frame. Multiple raw rooms
+    mapping to the same merged room accumulate — each contributes its own
+    plane set.
+    """
+    by_idx = {}
+    for raw_name, merged_idx in raw_to_merged.items():
+        ceiling = raw_ceilings.get(raw_name)
+        if ceiling is None or not ceiling.get("planes"):
+            continue
+        svd = raw_transforms.get(raw_name)
+        if svd is None:
+            continue
+        rot, trans, _residual, _method = svd
+        remapped = []
+        for plane in ceiling["planes"]:
+            world_corners = corners_to_world(
+                plane["corners_local"], plane["transform"]
+            )
+            remapped_corners = [
+                [round(float(c[0]), 4), round(float(c[1]), 4), round(float(c[2]), 4)]
+                for c in (rot @ np.array(corner) + trans for corner in world_corners)
+            ]
+            if len(remapped_corners) >= 3:
+                remapped.append({"corners": remapped_corners})
+        if not remapped:
+            continue
+        existing = by_idx.get(merged_idx)
+        if existing is None:
+            by_idx[merged_idx] = {"planes": remapped, "source": ceiling.get("source")}
+        else:
+            existing["planes"].extend(remapped)
+    return by_idx
+
+
 def extract_building(uuid, pipeline_dir, scan_cache_root, load_topology_graph=True):
     merged_path = find_merged_path(uuid, pipeline_dir)
     if not merged_path:
@@ -411,6 +492,14 @@ def extract_building(uuid, pipeline_dir, scan_cache_root, load_topology_graph=Tr
 
     raw_indices = build_raw_indices(raw_rooms, raw_transforms)
     merged_ids = build_merged_id_sets(merged)
+
+    raw_ceilings = load_raw_ceilings(scan_dir) if scan_dir else {}
+    raw_to_merged = (
+        build_raw_to_merged_index(raw_rooms, merged) if raw_rooms else {}
+    )
+    ceilings_by_merged_idx = _merge_ceilings_by_room(
+        raw_ceilings, raw_to_merged, raw_transforms
+    )
     global_state = {
         "walls": set(),
         "doors": set(),
@@ -478,6 +567,10 @@ def extract_building(uuid, pipeline_dir, scan_cache_root, load_topology_graph=Tr
             merged_room, raw_rooms, raw_transforms, global_state["storages"]
         )
 
+        raw_ceiling = ceilings_by_merged_idx.get(room_index)
+        raw_ceiling_planes = raw_ceiling["planes"] if raw_ceiling else []
+        raw_ceiling_source = raw_ceiling["source"] if raw_ceiling else None
+
         rooms_out.append(
             {
                 "story": story,
@@ -488,11 +581,14 @@ def extract_building(uuid, pipeline_dir, scan_cache_root, load_topology_graph=Tr
                 "windows": windows_out,
                 "openings": openings_out,
                 "storages": storages_out,
+                "raw_ceiling_planes": raw_ceiling_planes,
+                "raw_ceiling_source": raw_ceiling_source,
                 "_parent_lookup": _build_parent_lookup(merged_room, raw_rooms),
             }
         )
 
     floor_overlap_metrics = clip_floor_overlaps(rooms_out, graph=topology_graph)
+    reassign_raw_ceiling_planes_spatially(rooms_out)
     cross_floor_gaps = compute_cross_floor_gaps(rooms_out)
 
     story_slab_raw = defaultdict(list)
@@ -520,13 +616,9 @@ def extract_building(uuid, pipeline_dir, scan_cache_root, load_topology_graph=Tr
             )
         )
 
-    # Keep all slab entries (no half-floor exclusion) so find_closest_slab_y
-    # can pick the spatially nearest target for half-level buildings.
-    story_slabs = dict(story_slab_raw)
-
     # story_y_map uses the largest cluster of floor Ys for wall clipping baseline.
     story_y_map = {}
-    for story, entries in story_slabs.items():
+    for story, entries in story_slab_raw.items():
         floor_ys = sorted(floor_y for _cx, _cz, floor_y in entries)
         # Find the largest cluster within 0.30m
         best_cluster = floor_ys
@@ -545,28 +637,79 @@ def extract_building(uuid, pipeline_dir, scan_cache_root, load_topology_graph=Tr
 
     wall_clip_metrics = clip_walls_to_story_bounds(rooms_out, story_y_map)
 
+    # Build Shapely polygons per story for polygon-aware slab selection.
+    # Rooms only — gap polygons tend to be too loose for accurate XZ proximity.
+    story_slab_polys: dict[int, list[tuple[Polygon, float]]] = defaultdict(list)
     for room in rooms_out:
-        slabs_above = list(story_slabs.get(room["story"] + 1, []))
-        # Include same-story rooms significantly above this room (half-levels)
+        fp = room.get("floor_polygon") or []
+        if len(fp) >= 3:
+            try:
+                poly = Polygon([(c[0], c[2]) for c in fp])
+                if not poly.is_valid:
+                    poly = poly.buffer(0)
+            except Exception:
+                continue
+            if poly.is_empty or not poly.is_valid:
+                continue
+            fy = float(np.mean([c[1] for c in fp]))
+            story_slab_polys[room["story"]].append((poly, fy))
+
+    story_cohort_cache: dict[int, dict | None] = {}
+
+    for room in rooms_out:
+        # Consider slabs from every story strictly above this room's story.
+        # Split-level buildings can have a half-floor wing at story+1 whose
+        # footprint sits beside (not over) the wall — its slab then fails
+        # find_best_slab_above's XZ-distance test or sits below the wall top.
+        # Including story+2, +3, ... lets a wall still reach the next full
+        # slab directly overhead. Sorted ascending so ties break toward the
+        # lowest viable slab (physically correct).
+        slabs_above = []
+        for s in sorted(story_slab_polys):
+            if s > room["story"]:
+                slabs_above.extend(story_slab_polys[s])
+        # Include same-story rooms significantly above this room (half-levels).
         floor_polygon = room.get("floor_polygon") or []
         if floor_polygon:
             room_floor_y = float(np.mean([c[1] for c in floor_polygon]))
-            for cx, cz, fy in story_slabs.get(room["story"], []):
+            for poly, fy in story_slab_polys.get(room["story"], []):
                 if fy > room_floor_y + 1.0:
-                    slabs_above.append((cx, cz, fy))
+                    slabs_above.append((poly, fy))
+        story = room["story"]
         for wall in room["walls_computed"]:
-            slab_y = find_closest_slab_y(wall["corners"], slabs_above)
-            if slab_y is None:
+            wc = wall["corners"]
+            if not wc:
                 wall["extension_strip"] = None
                 continue
-            ext = extend_wall_to_slab(wall["corners"], slab_y)
+            wall_top_y = max(c[1] for c in wc)
+            slab_y = find_best_slab_above(wc, wall_top_y, slabs_above, max_gap=0.80)
+            if slab_y is not None:
+                ext = extend_wall_to_slab(wc, slab_y)
+                wall["extension_strip"] = None if ext is None else ext["extension_strip"]
+                if wall["extension_strip"] is not None:
+                    record(
+                        wall,
+                        STEP_EXTEND_WALL_SLAB,
+                        "modified",
+                        f"slab_y={slab_y:.2f}",
+                    )
+                continue
+            # No slab above: fall back to the dominant-height cohort heuristic.
+            if story not in story_cohort_cache:
+                story_cohort_cache[story] = compute_story_wall_top_cohort(rooms_out, story)
+            cohort = story_cohort_cache[story]
+            target_y = should_extend_wall_to_dominant(wc, cohort)
+            if target_y is None:
+                wall["extension_strip"] = None
+                continue
+            ext = extend_wall_to_dominant(wc, target_y)
             wall["extension_strip"] = None if ext is None else ext["extension_strip"]
             if wall["extension_strip"] is not None:
                 record(
                     wall,
-                    STEP_EXTEND_WALL_SLAB,
+                    STEP_EXTEND_WALL_DOMINANT,
                     "modified",
-                    f"slab_y={slab_y:.2f}",
+                    f"dom_y={target_y:.2f}, cov={cohort['coverage_frac']:.2f}",
                 )
 
     infer_ceilings(rooms_out)
@@ -596,6 +739,7 @@ def extract_building(uuid, pipeline_dir, scan_cache_root, load_topology_graph=Tr
         "rooms": rooms_out,
         "stories_found": stories_found,
         "stories_changed": stories_changed,
+        "split_level": _is_split_level(rooms_out),
         "computed_walls_total": computed_total,
         "merged_walls_total": merged_total,
         "scan_cache_walls": scan_cache_count,

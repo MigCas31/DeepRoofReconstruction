@@ -104,6 +104,148 @@ def _shapely_poly(points_2d: list[tuple[float, float]]):
         return None
 
 
+# Wall top within BARRIER_REACH of a cap plane is treated as reaching the cap
+# and gets its XZ strip subtracted from the cap polygon. Scan noise routinely
+# leaves walls 10-25 cm short of the true ceiling; 30 cm captures that cohort
+# without snapping truly shorter partitions.
+BARRIER_REACH = 0.30
+
+# Half-width of the buffer applied to a wall's XZ projection when building a
+# barrier strip. Walls project to near-degenerate quads (essentially a line),
+# so buffering gives a thin valid polygon that can cleanly subtract from caps.
+# Matched to the within_story gap detection scale in extract3d/gaps.py.
+WALL_STRIP_HALF_WIDTH = 0.03
+
+
+def _wall_xz_strip(corners: list) -> object | None:
+    """Build a Shapely polygon representing a wall's XZ footprint strip.
+
+    Walls are thin vertical quads whose XZ projection collapses to a line;
+    we build the line from the unique XZ points and buffer it out slightly
+    so downstream `difference` operations can cut caps cleanly.
+    """
+    from shapely.geometry import LineString, Polygon
+
+    if not corners:
+        return None
+    seen: list[tuple[float, float]] = []
+    for c in corners:
+        pt = (round(float(c[0]), 6), round(float(c[2]), 6))
+        if pt not in seen:
+            seen.append(pt)
+    if len(seen) < 2:
+        return None
+    try:
+        if len(seen) == 2:
+            geom = LineString(seen).buffer(WALL_STRIP_HALF_WIDTH, cap_style=2, join_style=2)
+        else:
+            poly = Polygon(seen)
+            if not poly.is_valid or poly.area < 1e-6:
+                geom = LineString(seen + [seen[0]]).buffer(
+                    WALL_STRIP_HALF_WIDTH, cap_style=2, join_style=2
+                )
+            else:
+                geom = poly.buffer(WALL_STRIP_HALF_WIDTH, cap_style=2, join_style=2)
+    except Exception:
+        return None
+    if geom.is_empty or geom.area < 1e-6:
+        return None
+    return geom
+
+
+def _wall_top_y(corners: list) -> float | None:
+    """Return the highest Y ordinate across a wall's 3D corners."""
+    if not corners:
+        return None
+    ys = [float(c[1]) for c in corners if len(c) >= 2]
+    if not ys:
+        return None
+    return max(ys)
+
+
+def _build_story_thermal_context(
+    exposed_rooms: list,
+    gap_walls: list | None,
+    rooms: list | None,
+) -> dict:
+    """Per-story precomputation for widened cap domains and wall barriers.
+
+    Returns a dict keyed by story with:
+      - attached_gaps_by_room: {room_index -> Shapely geometry of gap polygons}
+      - walls_info: list of (xz_strip_shapely, wall_top_y) for every wall on the story
+    """
+    context: dict[int, dict] = {}
+
+    stories = sorted({er["story"] for er in exposed_rooms})
+    for story in stories:
+        context[story] = {
+            "attached_gaps_by_room": {},
+            "walls_info": [],
+        }
+
+    if gap_walls:
+        from shapely.ops import unary_union
+
+        per_story_per_room: dict[int, dict[int, list]] = {}
+        for gap in gap_walls:
+            if gap.get("type") != "within_story":
+                continue
+            story = gap.get("story")
+            ri = gap.get("room_index")
+            if story is None or ri is None or story not in context:
+                continue
+            corners = gap.get("corners") or []
+            if len(corners) < 3:
+                continue
+            gap_xz = _xz_projection(corners)
+            poly = _shapely_poly(gap_xz)
+            if poly is None:
+                continue
+            per_story_per_room.setdefault(story, {}).setdefault(ri, []).append(poly)
+
+        for story, by_room in per_story_per_room.items():
+            for ri, polys in by_room.items():
+                if len(polys) == 1:
+                    context[story]["attached_gaps_by_room"][ri] = polys[0]
+                else:
+                    context[story]["attached_gaps_by_room"][ri] = unary_union(polys)
+
+    if rooms:
+        for room in rooms:
+            story = room.get("story")
+            if story is None or story not in context:
+                continue
+            walls = list(room.get("walls_merged") or []) + list(
+                room.get("walls_computed") or []
+            )
+            for wall in walls:
+                corners = wall.get("corners") or []
+                if len(corners) < 2:
+                    continue
+                strip = _wall_xz_strip(corners)
+                top_y = _wall_top_y(corners)
+                if strip is None or top_y is None:
+                    continue
+                context[story]["walls_info"].append((strip, top_y))
+
+    return context
+
+
+def _barrier_union_for_cap(
+    walls_info: list[tuple[object, float]],
+    cap_y: float,
+):
+    """Union of wall XZ strips whose top Y reaches the cap plane (cap_y − REACH)."""
+    from shapely.ops import unary_union
+
+    strips = [s for s, top_y in walls_info if top_y >= cap_y - BARRIER_REACH]
+    if not strips:
+        return None
+    if len(strips) == 1:
+        return strips[0]
+    return unary_union(strips)
+
+
 def _remove_collinear_xz(
     poly_3d: list[tuple[float, float, float]], eps: float = 1e-4
 ) -> list[tuple[float, float, float]]:
@@ -239,6 +381,7 @@ def _build_thermal_for_oblique_room(
     oblique_surfaces: list[dict],
     surface_indices: list[int],
     ceiling_planes: list,
+    story_context: dict | None = None,
 ) -> list[dict]:
     """Build thermal ceiling surfaces for a room under oblique roof surfaces.
 
@@ -247,6 +390,10 @@ def _build_thermal_for_oblique_room(
     1. The opposing plane (ridge line) — lower envelope
     2. wallTopY from above
     3. wallTopMin from below (eave height)
+
+    Ridge/eave caps use a widened footprint (room fp plus within-story gap
+    polygons assigned to this room) and are split by walls whose top Y
+    reaches the cap plane within BARRIER_REACH.
     """
     from .math_utils import plane_y_at
 
@@ -254,6 +401,7 @@ def _build_thermal_for_oblique_room(
     top_y = room_data["wallTopY"]
     bottom_y = _robust_eave_y(room_data)
     story = room_data["story"]
+    room_idx = room_data.get("room_index")
     out: list[dict] = []
 
     # Find ceiling planes that cover this room
@@ -317,24 +465,46 @@ def _build_thermal_for_oblique_room(
             out.append(entry)
             rendered_slant_polys.append(_xz_projection(clipped_for_render))
 
+    from shapely.ops import unary_union
+
     fp_xz = _xz_projection(fp)
     fp_shapely = _shapely_poly(fp_xz)
 
-    # Ridge cap: gap between pre-bottom-clip slant XZ projections at top_y
-    if fp_shapely is not None and slant_polys:
-        from shapely.ops import unary_union
+    # Widen the cap footprint with within-story gap polygons assigned to this
+    # room so ridge/eave caps cover the building envelope under the roof, not
+    # just the room's own floor slab.
+    attached_gaps = None
+    walls_info: list = []
+    if story_context is not None:
+        attached_gaps = story_context.get("attached_gaps_by_room", {}).get(room_idx)
+        walls_info = story_context.get("walls_info", [])
+    if fp_shapely is not None and attached_gaps is not None:
+        try:
+            fp_cap_shapely = unary_union([fp_shapely, attached_gaps])
+        except Exception:
+            fp_cap_shapely = fp_shapely
+    else:
+        fp_cap_shapely = fp_shapely
 
+    # Ridge cap: gap between pre-bottom-clip slant XZ projections at top_y
+    if fp_cap_shapely is not None and slant_polys:
         parts = [_shapely_poly(p) for p in slant_polys]
         parts = [p for p in parts if p is not None]
         if parts:
             slant_union = unary_union(parts)
             slant_hull = slant_union.convex_hull
-            bounded = fp_shapely.intersection(slant_hull)
+            bounded = fp_cap_shapely.intersection(slant_hull)
             try:
                 remainder = bounded.difference(slant_union)
             except Exception:
                 remainder = None
-            if remainder is not None:
+            if remainder is not None and not remainder.is_empty:
+                barrier = _barrier_union_for_cap(walls_info, top_y)
+                if barrier is not None:
+                    try:
+                        remainder = remainder.difference(barrier)
+                    except Exception:
+                        pass
                 cap_polys = _poly_3d_from_shapely(remainder, top_y)
                 for poly in cap_polys:
                     if len(poly) >= 3:
@@ -344,23 +514,27 @@ def _build_thermal_for_oblique_room(
                             "poly": poly,
                         })
 
-    # Eave cap: gap between all emitted thermal surfaces and the floor polygon.
+    # Eave cap: gap between all emitted thermal surfaces and the cap footprint.
     # Covers the area below the eave line where slants were clipped at wallTopMin.
-    if fp_shapely is not None:
-        from shapely.ops import unary_union as _unary_union
-
+    if fp_cap_shapely is not None:
         all_emitted_xz = []
         for entry in out:
             exz = _shapely_poly(_xz_projection(entry["poly"]))
             if exz is not None:
                 all_emitted_xz.append(exz)
         if all_emitted_xz:
-            emitted_union = _unary_union(all_emitted_xz)
+            emitted_union = unary_union(all_emitted_xz)
             try:
-                eave_gap = fp_shapely.difference(emitted_union)
+                eave_gap = fp_cap_shapely.difference(emitted_union)
             except Exception:
                 eave_gap = None
             if eave_gap is not None and not eave_gap.is_empty:
+                barrier = _barrier_union_for_cap(walls_info, bottom_y)
+                if barrier is not None:
+                    try:
+                        eave_gap = eave_gap.difference(barrier)
+                    except Exception:
+                        pass
                 eave_polys = _poly_3d_from_shapely(eave_gap, bottom_y)
                 for poly in eave_polys:
                     if len(poly) >= 3:
@@ -528,6 +702,7 @@ def _build_knee_wall_ceilings(
     floors_by_story: dict[int, list[list]],
     story_floor_y: dict[int, float],
     story_floor_regions: dict[int, list[tuple[list, float]]] | None = None,
+    oblique_roof_surfaces: list[dict] | None = None,
 ) -> list[dict]:
     """Detect knee-wall gaps: where floor below extends >30cm beyond floor above.
 
@@ -537,13 +712,31 @@ def _build_knee_wall_ceilings(
 
     For half-level buildings, the ceiling Y is looked up per gap polygon using
     story_floor_regions so each zone gets the correct height.
+
+    When ``oblique_roof_surfaces`` is provided, the knee polygon is clipped to
+    the XZ union of those surfaces (with a 0.3m eave buffer). This prevents
+    emitting a knee cap over regions with no sloped roof above — those regions
+    have their actual ceiling set by a flat roof or independent structure, and
+    a knee at the upper-floor height would float above an air gap.
     """
     from shapely.geometry import MultiPolygon, Polygon
     from shapely.ops import unary_union
 
     THRESHOLD_M = 0.30
     MIN_AREA = 0.1
+    OBLIQUE_BUFFER_M = 0.30
     out: list[dict] = []
+
+    oblique_union = None
+    if oblique_roof_surfaces:
+        oblique_polys = []
+        for s in oblique_roof_surfaces:
+            xz = _xz_projection(s.get("corners") or [])
+            shp = _shapely_poly(xz)
+            if shp is not None:
+                oblique_polys.append(shp)
+        if oblique_polys:
+            oblique_union = unary_union(oblique_polys).buffer(OBLIQUE_BUFFER_M)
 
     stories = sorted(floors_by_story.keys())
     for i in range(1, len(stories)):
@@ -588,6 +781,14 @@ def _build_knee_wall_ceilings(
 
         # Threshold met — use the full difference (not the buffered one)
         gap = full_gap
+
+        # Clip to oblique roof footprint: a knee only exists where a sloped
+        # roof descends onto the lower story.
+        if oblique_union is not None:
+            try:
+                gap = gap.intersection(oblique_union)
+            except Exception:
+                continue
 
         if gap.is_empty:
             continue
@@ -810,14 +1011,23 @@ def build_thermal_ceilings(
     story_floor_y: dict[int, float],
     story_floor_regions: dict[int, list[tuple[list, float]]] | None = None,
     dormers: list[dict] | None = None,
+    gap_walls: list | None = None,
+    rooms: list | None = None,
 ) -> list[dict]:
     """Compute thermal-envelope ceiling surfaces for all exposed rooms."""
     out: list[dict] = []
 
+    story_thermal_context = _build_story_thermal_context(
+        exposed_rooms, gap_walls, rooms
+    )
+
     # Compute knee wall gaps first so we can exclude their zones from
     # lower-story thermal surfaces (prevents double ceilings).
     knee_ceilings = _build_knee_wall_ceilings(
-        floors_by_story, story_floor_y, story_floor_regions
+        floors_by_story,
+        story_floor_y,
+        story_floor_regions,
+        oblique_roof_surfaces=oblique_roof_surfaces,
     )
 
     # Build knee zone lookup: for each upper story, the XZ union polygon
@@ -912,7 +1122,13 @@ def build_thermal_ceilings(
         # Find overlapping oblique surfaces
         surface_indices = _surfaces_overlapping_room(oblique_roof_surfaces, er["fp"])
         if surface_indices:
-            thermal = _build_thermal_for_oblique_room(er, oblique_roof_surfaces, surface_indices, ceiling_planes)
+            thermal = _build_thermal_for_oblique_room(
+                er,
+                oblique_roof_surfaces,
+                surface_indices,
+                ceiling_planes,
+                story_context=story_thermal_context.get(story),
+            )
             out.extend(thermal)
         else:
             # No oblique surface found — emit flat ceiling as fallback.

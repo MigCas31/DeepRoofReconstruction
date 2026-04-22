@@ -265,6 +265,87 @@ def test_room_ceiling_partitions_split_by_globally_selected_competing_surface() 
     assert round(total_area, 3) == 16.0
 
 
+def test_room_ceiling_partitions_ignore_room_unselected_global_flat_when_room_has_selected_obliques() -> None:
+    exposed_rooms = [
+        {
+            "room_index": 0,
+            "story": 0,
+            "graph_room_id": "room:r0",
+            "fp": _rect(0.0, 0.0, 4.0, 4.0),
+            "wallTopY": 3.5,
+            "wallTopMin": 2.5,
+        }
+    ]
+    oblique_surfaces = [
+        {
+            "roof_hypothesis_id": "roof-hypothesis:oblique:0",
+            "dominant_story": 0,
+            "corners": [
+                [0.0, 2.5, 0.0],
+                [4.0, 3.5, 0.0],
+                [4.0, 3.5, 4.0],
+                [0.0, 2.5, 4.0],
+            ],
+            "center": {"x": 2.0, "y": 3.0, "z": 2.0},
+            "cluster": {
+                "avgAzimuth": 90.0,
+                "avgIncl": 14.0,
+                "room_indices": [0],
+                "segs": [{}, {}, {}, {}],
+            },
+        }
+    ]
+    flat_surfaces = [
+        {
+            "roof_hypothesis_id": "roof-hypothesis:flat:0",
+            "kind": "intermediate",
+            "story": 0,
+            "room_index": 0,
+            "y": 3.0,
+            "corners": _rect(0.0, 0.0, 4.0, 4.0, y=3.0),
+        }
+    ]
+    hypothesis_graph = {
+        "nodes": [
+            {"id": "roof-hypothesis:oblique:0", "type": "RoofHypothesis", "surface_kind": "oblique", "story": 1, "selected": True},
+            {"id": "roof-hypothesis:flat:0", "type": "RoofHypothesis", "surface_kind": "flat", "story": 0, "selected": True},
+        ],
+        "edges": [
+            {
+                "id": "edge:covers:oblique",
+                "type": "COVERS_ROOM",
+                "from": "roof-hypothesis:oblique:0",
+                "to": "room:0",
+                "selected": True,
+                "evidence": {"edge_score": 0.8},
+            },
+            {
+                "id": "edge:covers:flat",
+                "type": "COVERS_ROOM",
+                "from": "roof-hypothesis:flat:0",
+                "to": "room:0",
+                "selected": False,
+                "evidence": {"edge_score": 0.3},
+            },
+        ],
+        "selected_hypothesis_ids": ["roof-hypothesis:oblique:0", "roof-hypothesis:flat:0"],
+        "selected_room_assignments": {"room:0": ["roof-hypothesis:oblique:0"]},
+    }
+
+    partitions = derive_room_ceiling_partitions(
+        room_records=exposed_rooms,
+        oblique_roof_surfaces=oblique_surfaces,
+        flat_roof_surfaces=flat_surfaces,
+        hypothesis_graph=hypothesis_graph,
+    )
+
+    room = partitions["room_partitions"][0]
+
+    assert room["mixed"] is False
+    assert all(part["kind"] == "oblique" for part in room["partitions"])
+    assert partitions["metadata"]["flat_partition_count"] == 0
+
+
 def test_room_ceiling_partitions_fallback_to_graph_footprint_when_raw_polygon_is_invalid() -> None:
     exposed_rooms = [
         {

@@ -10,8 +10,7 @@ from reconcile.loader import load_merged
 from reconcile_v2.builder import build_topology_graph
 from reconcile_v2.ifc_mapping import run_ifc_conformance_checks
 from reconcile_v2.output import validate_against_schema
-from reconcile_v2.stitch_geometry import build_stitched_geometry
-from reconcile_v2.stitch_geometry import _build_edge_topology
+from reconcile_v2.stitch_geometry import _build_edge_topology, build_stitched_geometry
 from reconcile_v2.topology import infer_gap_records, infer_intra_story_adjacency
 
 

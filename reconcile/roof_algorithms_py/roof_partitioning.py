@@ -21,6 +21,11 @@ AREA_EPS = 0.01
 LATTICE_SCALE_MM = 1000
 ROOM_TOP_MIN_CLEARANCE_M = 0.15
 ROOM_TOP_SHELL_TOL_M = 0.08
+# Max y a flat hypothesis may sit above the room's highest wallTop before it
+# is rejected as physically outside the room volume. Scan-noise overshoots
+# cluster under ~0.15 m; cross-story phantoms start at ~1 m. 0.5 m cleanly
+# separates the two without regressing noisy-but-legitimate measurements.
+ROOM_TOP_MAX_CLEARANCE_M = 0.5
 
 
 def _snap(value: float) -> float:
@@ -127,6 +132,16 @@ def _decompose_lines(geom: Any) -> list[LineString]:
 def _flat_y(surface: dict[str, Any], room_data: dict[str, Any]) -> float:
     y = surface.get("y")
     if isinstance(y, (float, int)):
+        wall_top_y = room_data.get("wallTopY")
+        if isinstance(wall_top_y, (float, int)):
+            # Flat-segment clusters use a 0.15 m y-tolerance, so the cluster
+            # avgY can sit up to 0.15 m below the room's actual wall top.
+            # Clamp only within that range; larger gaps indicate a different
+            # issue (wrong hypothesis, cross-story confusion) and should not
+            # be silently raised.
+            gap = float(wall_top_y) - float(y)
+            if 0.001 < gap <= 0.15:
+                return float(wall_top_y)
         return float(y)
     implicit_top_y = room_data.get("implicit_top_y")
     if isinstance(implicit_top_y, (float, int)):
@@ -166,8 +181,24 @@ def _implicit_flat_y(room_data: dict[str, Any]) -> float:
     )
 
 
+def _room_max_valid_top_y(room_data: dict[str, Any]) -> float:
+    wall_top_ys = [
+        float(value)
+        for value in (room_data.get("wallTopYs") or [])
+        if isinstance(value, (float, int))
+    ]
+    if wall_top_ys:
+        wall_top_max = max(wall_top_ys)
+    else:
+        wall_top_max = float(room_data.get("wallTopY", 0.0))
+    return _snap(wall_top_max + ROOM_TOP_MAX_CLEARANCE_M)
+
+
 def _flat_surface_is_valid_for_room(surface: dict[str, Any], room_data: dict[str, Any]) -> bool:
-    return _flat_y(surface, room_data) >= _room_min_valid_top_y(room_data) - EPS
+    y = _flat_y(surface, room_data)
+    if y < _room_min_valid_top_y(room_data) - EPS:
+        return False
+    return y <= _room_max_valid_top_y(room_data) + EPS
 
 
 def _build_implicit_flat_atom(
@@ -184,7 +215,7 @@ def _build_implicit_flat_atom(
         flat_role_reason = "explicit_upper_occupancy_shell_cap"
     else:
         flat_role_reason = "room_shell_top_fallback"
-    corners = _atom_corners(atom, "flat", None, {**room_data, "implicit_top_y": _implicit_flat_y(room_data)})
+    corners, holes = _atom_corners(atom, "flat", None, {**room_data, "implicit_top_y": _implicit_flat_y(room_data)})
     if len(corners) < 3:
         return None
     atom_id = f"ceiling-partition:{_stable_hash([room_key, 'implicit-flat', str(corners)], 20)}"
@@ -195,6 +226,7 @@ def _build_implicit_flat_atom(
         "kind": "flat",
         "roof_hypothesis_id": None,
         "poly": corners,
+        "holes": holes,
         "area_m2": round(float(atom.area), 6),
         "supporting_roof_hypothesis_ids": sorted(set(str(value) for value in (supporting_hypothesis_ids or []) if value)),
         "flat_role": "implicit_room_shell_cap",
@@ -329,21 +361,91 @@ def _equal_height_split_lines(
     return [line for line in _decompose_lines(clipped) if line.length > 0.05]
 
 
-def _atom_corners(atom: Polygon, kind: str, surface: dict[str, Any] | None, room_data: dict[str, Any]) -> list[tuple[float, float, float]]:
-    coords = list(atom.exterior.coords)
+def _snap_ring_xz(coords: list) -> list[tuple[float, float]]:
     if coords and coords[-1] == coords[0]:
         coords = coords[:-1]
-    corners: list[tuple[float, float, float]] = []
-    if kind == "oblique" and surface is not None:
-        plane = _surface_plane(surface)
+    snapped: list[tuple[float, float]] = []
+    for x, z, *_ in coords:
+        point = (_snap(float(x)), _snap(float(z)))
+        if snapped and point == snapped[-1]:
+            continue
+        snapped.append(point)
+    if len(snapped) >= 2 and snapped[0] == snapped[-1]:
+        snapped.pop()
+    return snapped
+
+
+def _best_repaired_polygon(geom: Any, reference: Polygon) -> Polygon | None:
+    polys = [
+        poly
+        for poly in _decompose_polys(geom)
+        if isinstance(poly, Polygon) and not poly.is_empty and poly.area > AREA_EPS
+    ]
+    if not polys:
+        return None
+    rep = reference.representative_point()
+    covering = [poly for poly in polys if poly.buffer(EPS).covers(rep)]
+    candidates = covering or polys
+    return max(
+        candidates,
+        key=lambda poly: (
+            poly.intersection(reference).area,
+            poly.area,
+        ),
+    )
+
+
+def _sanitize_snapped_atom_polygon(
+    atom: Polygon,
+    exterior_xz: list[tuple[float, float]],
+    holes_xz: list[list[tuple[float, float]]],
+) -> Polygon | None:
+    if len(exterior_xz) < 3:
+        return None
+    snapped = Polygon(exterior_xz, [ring for ring in holes_xz if len(ring) >= 3])
+    if snapped.is_valid and not snapped.is_empty and snapped.area > AREA_EPS:
+        return snapped
+    try:
+        repaired = make_valid(snapped)
+    except Exception:
+        return None
+    return _best_repaired_polygon(repaired, atom)
+
+
+def _atom_corners(
+    atom: Polygon,
+    kind: str,
+    surface: dict[str, Any] | None,
+    room_data: dict[str, Any],
+) -> tuple[list[tuple[float, float, float]], list[list[tuple[float, float, float]]]]:
+    # Shapely's polygonize() can produce polygons with interior rings when the
+    # linework nests (e.g. a room atom that encloses sibling partitions). We
+    # must carry those holes through to the viewer — storing only the exterior
+    # makes the stored vertex ring disagree with atom.area and triggers a
+    # "huge triangle" rendering artifact downstream.
+    plane = _surface_plane(surface) if kind == "oblique" and surface is not None else None
+    flat_y = _snap(_flat_y(surface or {}, room_data))
+
+    snapped_exterior = _snap_ring_xz(list(atom.exterior.coords))
+    snapped_holes = [_snap_ring_xz(list(ring.coords)) for ring in atom.interiors]
+    sanitized_atom = _sanitize_snapped_atom_polygon(atom, snapped_exterior, snapped_holes)
+    if sanitized_atom is None:
+        return [], []
+
+    def _map_ring(coords: list[tuple[float, float]]) -> list[tuple[float, float, float]]:
         if plane is not None:
-            for x, z, *_ in coords:
-                sx = _snap(float(x))
-                sz = _snap(float(z))
-                corners.append((sx, _snap(plane_y_at(plane, sx, sz)), sz))
-            return corners
-    y = _snap(_flat_y(surface or {}, room_data))
-    return [(_snap(float(x)), y, _snap(float(z))) for x, z, *_ in coords]
+            out: list[tuple[float, float, float]] = []
+            for x, z in coords:
+                sx = float(x)
+                sz = float(z)
+                out.append((sx, _snap(plane_y_at(plane, sx, sz)), sz))
+            return out
+        return [(float(x), flat_y, float(z)) for x, z in coords]
+
+    exterior = _map_ring(list(sanitized_atom.exterior.coords)[:-1])
+    holes = [_map_ring(list(ring.coords)[:-1]) for ring in sanitized_atom.interiors]
+    holes = [ring for ring in holes if len(ring) >= 3]
+    return exterior, holes
 
 
 def _room_outline_corners(poly: Polygon, floor_y: float) -> list[list[float]]:
@@ -407,7 +509,17 @@ def derive_room_ceiling_partitions(
         candidate_records: list[dict[str, Any]] = []
         linework = _linework_for_polygon(room_polygon)
 
-        candidate_ids = list(dict.fromkeys(selected_ids + sorted(selected_hypothesis_ids - set(selected_ids))))
+        fallback_candidate_ids = sorted(selected_hypothesis_ids - set(selected_ids))
+        if selected_ids:
+            # Let globally-selected oblique hypotheses challenge a room-local
+            # flat selection, but do not allow room-unselected flat planes to
+            # steal atoms from rooms that already have explicit assignments.
+            fallback_candidate_ids = [
+                hypothesis_id
+                for hypothesis_id in fallback_candidate_ids
+                if str((nodes_by_id.get(hypothesis_id) or {}).get("surface_kind", "flat")) == "oblique"
+            ]
+        candidate_ids = list(dict.fromkeys(selected_ids + fallback_candidate_ids))
         for hypothesis_id in candidate_ids:
             surfaces = surfaces_by_hypothesis.get(hypothesis_id) or []
             if not surfaces:
@@ -516,7 +628,7 @@ def derive_room_ceiling_partitions(
                 owner_kind = "flat"
                 owner_surface = None
 
-            corners = _atom_corners(atom, owner_kind, owner_surface, room_data)
+            corners, holes = _atom_corners(atom, owner_kind, owner_surface, room_data)
             if len(corners) < 3:
                 continue
             partition_id = f"ceiling-partition:{_stable_hash([room_key, owner_id or 'fallback', str(corners)], 20)}"
@@ -527,6 +639,7 @@ def derive_room_ceiling_partitions(
                 "kind": owner_kind,
                 "roof_hypothesis_id": owner_id,
                 "poly": corners,
+                "holes": holes,
                 "area_m2": round(float(atom.area), 6),
                 "supporting_roof_hypothesis_ids": sorted(set(supporting_hypothesis_ids)),
                 "top_boundary_mode": room_data.get("top_boundary_mode"),

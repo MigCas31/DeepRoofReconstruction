@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from shapely.geometry import Polygon
+from shapely.geometry import GeometryCollection, Polygon
 from shapely.validation import make_valid
 
 from .graph_utils import room_key as _room_key
@@ -42,6 +42,18 @@ def _largest_polygon(geom: Any) -> Polygon | None:
             )
         except ValueError:
             return None
+    if isinstance(geom, GeometryCollection):
+        best = None
+        best_area = 0.0
+        for child in geom.geoms:
+            poly = _largest_polygon(child)
+            if poly is None:
+                continue
+            area = float(poly.area)
+            if area > best_area:
+                best = poly
+                best_area = area
+        return best
     return None
 
 
@@ -413,12 +425,7 @@ def build_roof_coverage_graph(
     serializable_subparts: list[dict[str, Any]] = []
     for subpart in coverage_subparts:
         poly = subpart.get("polygon")
-        poly_for_serialization = poly
-        if poly_for_serialization is not None and getattr(poly_for_serialization, "geom_type", "") == "MultiPolygon":
-            try:
-                poly_for_serialization = max(poly_for_serialization.geoms, key=lambda geom: geom.area)
-            except Exception:
-                poly_for_serialization = None
+        poly_for_serialization = _largest_polygon(poly)
         serializable_subparts.append(
             {
                 "id": subpart["id"],

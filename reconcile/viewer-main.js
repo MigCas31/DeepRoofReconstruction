@@ -1,28 +1,35 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+const VIEWER_MODULE_VERSION = '20260421d';
 import {
   STORY_COLORS, STORY_WALL_COLORS, ROOM_COLORS,
   DOOR_COLOR, DOOR_EDGE, WINDOW_COLOR, WINDOW_EDGE, MERGED_COLOR, MERGED_EDGE,
+  RAW_CEILING_COLOR, RAW_CEILING_EDGE,
+  RAW_CEILING_ROLE_COLORS, CEILING_RECON_DORMER_COLORS, CEILING_RECON_WING_COLORS,
+  COMPUTED_OVEREXTEND_COLORS,
+  RAW_DISAGREEMENT_COLORS,
+  CEILING_REPLACEMENT_COLORS,
   ROOF_CLUSTER_COLORS,
   SOURCE_COLORS, SOURCE_LABELS,
   LAYER_CONTROL_IDS, LAYER_KEYS, PIPELINE_STEPS,
   EMPTY_MAP_STYLE,
-} from './viewer-modules/constants.js';
+} from './viewer-modules/constants.js?v=20260420c';
 import {
   createPolygonMesh, createEdgeLoop, createLine, createPolyline3,
   createTriangleMesh, createTriangleBoundaryEdges,
   disposeGroup, polygonPlaneBasis, projectToPlane2,
   collectWallCutoutHoles, orientedStructureCorners,
-} from './viewer-modules/geometry.js';
-import { renderRoofFromPythonResult } from './viewer-modules/roof-python.js';
+} from './viewer-modules/geometry.js?v=20260418newell';
+import { renderRoofFromPythonResult } from './viewer-modules/roof-python.js?v=20260420c';
 import {
   renderOntologySemantics,
   renderOntologyContinuationDiagnostics,
   renderOntologyExact,
-} from './viewer-modules/ontology-cells.js';
-import { renderOntologyEnhancedFullModel } from './viewer-modules/full-model-ontology.js';
-import { createOrthoMapController } from './viewer-modules/map-ortho.js';
-import { bindUIEventHandlers } from './viewer-modules/ui-bindings.js';
+} from './viewer-modules/ontology-cells.js?v=20260420c';
+import { renderOntologyEnhancedFullModel } from './viewer-modules/full-model-ontology.js?v=20260420c';
+import { renderV3Model, renderV3RoofProposals, renderCandidateFaces, renderReconstruction, renderRidgeEaveScoring, proposalColor } from './viewer-modules/v3-model.js?v=20260420c';
+import { createOrthoMapController } from './viewer-modules/map-ortho.js?v=20260420c';
+import { bindUIEventHandlers } from './viewer-modules/ui-bindings.js?v=20260418m';
 
 const viewport = document.getElementById('viewport');
 const canvas = document.getElementById('c');
@@ -85,6 +92,27 @@ let alignmentByUuid = {};
 let alignmentSaveTimer = null;
 let anchorModeEnabled = false;
 let pyRoofByUuid = {};
+// Phase-2 raw-ceiling prototype sidecar. Shape:
+//   { thresholds, planes: {element_id -> {role, archetype, ...}},
+//     rooms: {"<uuid>::room::<story>:<ri>" -> {archetype, features, ...}},
+//     reconstructions: {"<uuid>": {"dormer": [...], "wing": [...]}} }
+let rawCeilingPrototype = null;
+let rawCeilingPrototypePromise = null;
+// Computed-surface overextend sidecar from
+// scripts/audit_computed_surface_extent_vs_raw.py. Shape:
+//   { buildings: {"<uuid>": [{overextend_element_id, corners, ...}]} }
+let computedOverextend = null;
+let computedOverextendPromise = null;
+// Raw-ceiling orientation-disagreement sidecar from
+// scripts/audit_raw_orientation_disagreement.py. Shape:
+//   { buildings: {"<uuid>": [{element_id, corners, angle_deg, ...}]} }
+let rawDisagreement = null;
+let rawDisagreementPromise = null;
+// Clean-ceiling replacement sidecar from
+// scripts/audit_noisy_slanted_ceiling_replacement.py. Shape:
+//   { buildings: {"<uuid>": [{element_id, piece_role, corners, ...}]} }
+let ceilingReplacement = null;
+let ceilingReplacementPromise = null;
 let ontologySummaryByUuid = {};
 let ontologySummaryPromiseByUuid = {};
 let ontologyPartDetailsByUuid = {};
@@ -92,6 +120,8 @@ let ontologyPartPromiseByUuid = {};
 let ontologyLoadStateByUuid = {};
 let selectedOntologyPartByUuid = {};
 let fullModelEnhancementByUuid = {};
+let fullModelPayloadByUuid = {};
+let fullModelPayloadPromiseByUuid = {};
 let fullModelDiffModeEnabled = false;
 let buildingIndexByUuid = new Map();
 const elementMeshByUid = new Map();
@@ -99,16 +129,75 @@ let pendingElementUid = getElementUidFromHash();
 let pendingBuildingUuid = getBuildingUuidFromHash();
 let buildingInfoBaseHtml = '';
 
+window.__viewerDebug = () => ({
+  summaryKeys: Object.keys(ontologySummaryByUuid),
+  fullModelKeys: Object.keys(fullModelPayloadByUuid),
+  fullModelPromiseKeys: Object.keys(fullModelPayloadPromiseByUuid),
+  enhancementKeys: Object.keys(fullModelEnhancementByUuid),
+  fullModelVisible: groups.fullModelOntology?.visible,
+  fullModelChildCount: groups.fullModelOntology?.children?.length,
+  checkboxOn: document.getElementById('show-full-model')?.checked,
+  current: DATA[currentBuilding]?.uuid,
+  ridgeEave: {
+    visible: groups.ridgeEave?.visible,
+    childCount: groups.ridgeEave?.children?.length,
+    scoresKeys: Object.keys(ridgeEaveScoresByUuid),
+    candidateKeys: Object.keys(candidateFacesByUuid),
+  },
+});
+window.__viewerForceRidgeEave = () => {
+  const bldg = DATA[currentBuilding];
+  if (!bldg?.uuid) return 'no current building';
+  const ctl = document.getElementById('show-ridge-eave');
+  if (ctl) ctl.checked = true;
+  setLayerVisibility('ridgeEave', true, true);
+  return Promise.all([
+    ensureCandidateFaces(bldg.uuid),
+    ensureRidgeEaveScores(bldg.uuid),
+  ]).then(() => {
+    renderRidgeEaveForBuilding(bldg);
+    renderLegend();
+    return {
+      candidates: !!candidateFacesByUuid[bldg.uuid],
+      scores: !!ridgeEaveScoresByUuid[bldg.uuid],
+      visible: groups.ridgeEave?.visible,
+      childCount: groups.ridgeEave?.children?.length,
+    };
+  });
+};
+window.__viewerForceLoad = () => {
+  const bldg = DATA[currentBuilding];
+  if (!bldg?.uuid) return 'no current building';
+  return Promise.all([
+    ensureOntologySummary(bldg.uuid),
+    ensureOntologyFullModel(bldg.uuid),
+  ]).then(([sum, full]) => {
+    renderFullModelOntologyForBuilding(bldg);
+    updateOntologyStatusInfo();
+    return {
+      summary: !!sum,
+      fullModel: !!full,
+      childCount: groups.fullModelOntology?.children?.length,
+    };
+  });
+};
+
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 
 function getVisiblePickRoots() {
+  if (typeof document !== 'undefined' && document.body?.dataset?.mode === 'labeling') {
+    return [groups.v3Proposals].filter((g) => g && g.visible);
+  }
   return [
     groups.merged,
     groups.computed,
     groups.doors,
     groups.windows,
     groups.floors,
+    groups.rawCeilings,
+    groups.rawCeilingsRoles,
+    groups.rawCeilingsReconstructions,
     groups.gaps,
     groups.crossStory,
     groups.extensions,
@@ -117,6 +206,7 @@ function getVisiblePickRoots() {
     groups.extGaps,
     groups.fullModel,
     groups.ceilings,
+    groups.ceilingReplacement,
     groups.thermalCeilings,
     groups.roofClusters,
     groups.fullModelHeuristicRoof,
@@ -124,7 +214,23 @@ function getVisiblePickRoots() {
     groups.ontologySemantics,
     groups.ontologyContinuation,
     groups.ontologyCells,
+    groups.v3Model,
+    groups.v3Proposals,
+    groups.candidateFaces,
+    groups.reconstruction,
+    groups.ridgeEave,
+    groups.gableExtension,
   ].filter(g => g.visible);
+}
+
+function pickElementIntersection(intersections) {
+  if (!Array.isArray(intersections) || intersections.length === 0) return null;
+  const withUid = intersections.filter((it) => it.object?.userData?.elementUid);
+  if (withUid.length === 0) return null;
+  const rawCeilingHit = withUid.find(
+    (it) => it.object?.userData?.elementLocator?.kind === 'ceiling-raw'
+  );
+  return rawCeilingHit || withUid[0];
 }
 
 function ontologyPartIdFromLocator(locator) {
@@ -166,6 +272,143 @@ function cornersCenter(corners) {
   return [sx / corners.length, sy / corners.length, sz / corners.length];
 }
 
+// Least-squares plane fit y = a*x + b*z + c over ≥3 corners. Rejects fits
+// whose max residual exceeds 0.10 m (input is not planar enough to clip
+// against safely). Returns [a, b, c] or null.
+function fitObliquePlaneYXZ(corners) {
+  if (!Array.isArray(corners) || corners.length < 3) return null;
+  let sx = 0, sz = 0, sy = 0;
+  let sxx = 0, szz = 0, sxz = 0, sxy = 0, szy = 0;
+  const n = corners.length;
+  for (const c of corners) {
+    const x = Number(c[0]), y = Number(c[1]), z = Number(c[2]);
+    sx += x; sz += z; sy += y;
+    sxx += x * x; szz += z * z; sxz += x * z;
+    sxy += x * y; szy += z * y;
+  }
+  const m00 = sxx, m01 = sxz, m02 = sx;
+  const m10 = sxz, m11 = szz, m12 = sz;
+  const m20 = sx,  m21 = sz,  m22 = n;
+  const det = (
+    m00 * (m11 * m22 - m12 * m21)
+    - m01 * (m10 * m22 - m12 * m20)
+    + m02 * (m10 * m21 - m11 * m20)
+  );
+  if (Math.abs(det) < 1e-10) return null;
+  const invDet = 1 / det;
+  const a = invDet * (
+    sxy * (m11 * m22 - m12 * m21)
+    - m01 * (szy * m22 - m12 * sy)
+    + m02 * (szy * m21 - m11 * sy)
+  );
+  const b = invDet * (
+    m00 * (szy * m22 - m12 * sy)
+    - sxy * (m10 * m22 - m12 * m20)
+    + m02 * (m10 * sy  - szy * m20)
+  );
+  const c = invDet * (
+    m00 * (m11 * sy  - szy * m21)
+    - m01 * (m10 * sy  - szy * m20)
+    + sxy * (m10 * m21 - m11 * m20)
+  );
+  let maxResid = 0;
+  for (const corner of corners) {
+    const resid = Math.abs(corner[1] - (a * corner[0] + b * corner[2] + c));
+    if (resid > maxResid) maxResid = resid;
+  }
+  if (maxResid > 0.10) return null;
+  return [a, b, c];
+}
+
+// Point-in-polygon test on the xz plane with a boundary buffer (ray cast
+// plus a distance-to-edge fallback so walls that share vertices with the
+// oblique atom's footprint aren't excluded by numeric slack).
+function pointInXZPolygon(x, z, poly, boundaryTol = 0.05) {
+  if (!Array.isArray(poly) || poly.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i][0], zi = poly[i][1];
+    const xj = poly[j][0], zj = poly[j][1];
+    const denom = (zj - zi) || 1e-12;
+    const hit = ((zi > z) !== (zj > z))
+      && (x < (xj - xi) * (z - zi) / denom + xi);
+    if (hit) inside = !inside;
+  }
+  if (inside) return true;
+  const tol2 = boundaryTol * boundaryTol;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const dx = poly[i][0] - poly[j][0];
+    const dz = poly[i][1] - poly[j][1];
+    const len2 = dx * dx + dz * dz;
+    if (len2 < 1e-12) continue;
+    let t = ((x - poly[j][0]) * dx + (z - poly[j][1]) * dz) / len2;
+    if (t < 0) t = 0; else if (t > 1) t = 1;
+    const px = poly[j][0] + t * dx;
+    const pz = poly[j][1] + t * dz;
+    const d2 = (x - px) * (x - px) + (z - pz) * (z - pz);
+    if (d2 <= tol2) return true;
+  }
+  return false;
+}
+
+// Build a Map<`${story}:${roomIndex}`, Array<{plane,footprint,atomId}>> from
+// pyResult.ceiling_partitions.oblique. Oblique atoms whose corners don't
+// admit a planar fit are skipped.
+function buildObliqueCeilingPlaneIndex(pyResult) {
+  const index = new Map();
+  const atoms = pyResult?.ceiling_partitions?.oblique || [];
+  for (const atom of atoms) {
+    const ri = atom?.room_index;
+    const st = atom?.story;
+    if (ri == null || st == null) continue;
+    const corners = atom.poly || atom.corners || [];
+    if (!Array.isArray(corners) || corners.length < 3) continue;
+    const plane = fitObliquePlaneYXZ(corners);
+    if (!plane) continue;
+    const footprint = corners.map(c => [Number(c[0]), Number(c[2])]);
+    const key = `${st}:${ri}`;
+    let bucket = index.get(key);
+    if (!bucket) { bucket = []; index.set(key, bucket); }
+    bucket.push({ plane, footprint, atomId: atom.id });
+  }
+  return index;
+}
+
+// Lower any corner whose xz falls under an overhead oblique ceiling plane
+// so the corner sits on the plane instead of poking through it. Never
+// raises a corner, and never drops a corner below the polygon's original
+// min-y (which would invert a wall quad if the slope dips below the floor).
+// Returns new array (shallow) if any corner changed, else input unchanged.
+function clipCornersToObliqueCeilings(corners, planes) {
+  if (!planes || planes.length === 0) return corners;
+  if (!Array.isArray(corners) || corners.length === 0) return corners;
+  let minY = Infinity;
+  for (const c of corners) {
+    const y = Number(c[1]);
+    if (y < minY) minY = y;
+  }
+  let changed = false;
+  const out = new Array(corners.length);
+  for (let i = 0; i < corners.length; i++) {
+    const c = corners[i];
+    const x = Number(c[0]), y = Number(c[1]), z = Number(c[2]);
+    let clippedY = y;
+    for (const { plane, footprint } of planes) {
+      if (!pointInXZPolygon(x, z, footprint)) continue;
+      const py = plane[0] * x + plane[1] * z + plane[2];
+      if (py < clippedY) clippedY = py;
+    }
+    if (clippedY < minY) clippedY = minY;
+    if (clippedY !== y) {
+      changed = true;
+      out[i] = [x, clippedY, z];
+    } else {
+      out[i] = c;
+    }
+  }
+  return changed ? out : corners;
+}
+
 function parseElementUid(text) {
   const match = String(text || "").trim().match(
     /^([0-9a-fA-F-]{36})::([a-zA-Z0-9_-]+)::(.+)$/
@@ -205,48 +448,128 @@ function getBuildingUuidFromHash() {
   return match[1];
 }
 
-function selectElementByUid(uid, { focus = true, updateHash = true } = {}) {
+function getLayerPresetFromHash() {
+  // #b=<uuid>&layers=<comma-list>   — explicitly set layer toggles for
+  // scripted loads (screenshot harness). Unknown keys are ignored.
+  const hash = window.location.hash || "";
+  const match = hash.match(/(?:^#|&)layers=([^&]+)/);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1])
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  } catch (_err) {
+    return null;
+  }
+}
+
+function getCameraPresetFromHash() {
+  const hash = window.location.hash || "";
+  const match = hash.match(/(?:^#|&)cam=([A-Za-z_-]+)/);
+  if (!match) return null;
+  return match[1];
+}
+
+// Multi-select set (shift-click). The "primary" is the last-clicked uid —
+// its features drive the panel. Labels apply to every entry on submit.
+const multiSelectedUids = new Set();
+
+function resolveMeshByUid(uid) {
+  let mesh = elementMeshByUid.get(uid);
+  if (!mesh) {
+    // Fallback: the queue still carries parent ids, but the renderer emits
+    // pieces under `<parent>#...` — `#side-<bits>` for opposing-seam splits
+    // and `#<n>` for user-drawn manual splits. Match any `#`-suffixed piece
+    // so navigation lands on something visible.
+    const piecePrefix = `${uid}#`;
+    for (const [candidateUid, candidateMesh] of elementMeshByUid) {
+      if (typeof candidateUid === 'string' && candidateUid.startsWith(piecePrefix)) {
+        mesh = candidateMesh;
+        break;
+      }
+    }
+  }
+  return mesh || null;
+}
+
+function addSelectionHighlightFor(mesh) {
+  if (!mesh || !mesh.geometry) return;
+  const highlightMesh = new THREE.Mesh(
+    mesh.geometry.clone(),
+    new THREE.MeshBasicMaterial({
+      color: 0xffd166,
+      transparent: true,
+      opacity: 0.32,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  highlightMesh.position.copy(mesh.position);
+  highlightMesh.quaternion.copy(mesh.quaternion);
+  highlightMesh.scale.copy(mesh.scale);
+  highlightMesh.renderOrder = 1000;
+  groups.selection.add(highlightMesh);
+
+  const edgeLines = new THREE.LineSegments(
+    new THREE.EdgesGeometry(mesh.geometry),
+    new THREE.LineBasicMaterial({ color: 0xffef99, transparent: true, opacity: 0.95 }),
+  );
+  edgeLines.position.copy(mesh.position);
+  edgeLines.quaternion.copy(mesh.quaternion);
+  edgeLines.scale.copy(mesh.scale);
+  edgeLines.renderOrder = 1001;
+  groups.selection.add(edgeLines);
+}
+
+function rebuildSelectionHighlights() {
+  disposeGroup(groups.selection);
+  for (const uid of multiSelectedUids) {
+    addSelectionHighlightFor(resolveMeshByUid(uid));
+  }
+}
+
+function selectElementByUid(uid, { focus = true, updateHash = true, additive = false } = {}) {
   const parsed = parseElementUid(uid);
   if (!parsed) return false;
-  const mesh = elementMeshByUid.get(parsed.uid);
+  const mesh = resolveMeshByUid(parsed.uid);
   if (!mesh) return false;
-  disposeGroup(groups.selection);
 
-  if (mesh.geometry) {
-    const highlightMesh = new THREE.Mesh(
-      mesh.geometry.clone(),
-      new THREE.MeshBasicMaterial({
-        color: 0xffd166,
-        transparent: true,
-        opacity: 0.32,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-      }),
-    );
-    highlightMesh.position.copy(mesh.position);
-    highlightMesh.quaternion.copy(mesh.quaternion);
-    highlightMesh.scale.copy(mesh.scale);
-    highlightMesh.renderOrder = 1000;
-    groups.selection.add(highlightMesh);
-
-    const edgeLines = new THREE.LineSegments(
-      new THREE.EdgesGeometry(mesh.geometry),
-      new THREE.LineBasicMaterial({ color: 0xffef99, transparent: true, opacity: 0.95 }),
-    );
-    edgeLines.position.copy(mesh.position);
-    edgeLines.quaternion.copy(mesh.quaternion);
-    edgeLines.scale.copy(mesh.scale);
-    edgeLines.renderOrder = 1001;
-    groups.selection.add(edgeLines);
+  if (additive) {
+    if (multiSelectedUids.has(parsed.uid)) {
+      multiSelectedUids.delete(parsed.uid);
+    } else {
+      multiSelectedUids.add(parsed.uid);
+    }
+  } else {
+    multiSelectedUids.clear();
+    multiSelectedUids.add(parsed.uid);
   }
+  rebuildSelectionHighlights();
+
+  if (multiSelectedUids.size === 0) {
+    hideProposalPanel();
+    setMapStatus('Cleared selection');
+    return false;
+  }
+
+  // "Primary" = the clicked uid if still selected, otherwise an arbitrary
+  // remaining entry. It drives the panel (features, current label, ...).
+  const primaryUid = multiSelectedUids.has(parsed.uid)
+    ? parsed.uid
+    : multiSelectedUids.values().next().value;
+  const primaryMesh = resolveMeshByUid(primaryUid);
+  const primaryParsed = primaryUid === parsed.uid ? parsed : parseElementUid(primaryUid);
+  if (!primaryMesh || !primaryParsed) return false;
 
   const bldg = DATA[currentBuilding];
   const addr = bldg?.address || bldg?.uuid || "Building";
-  const locator = mesh.userData?.elementLocator;
+  const locator = primaryMesh.userData?.elementLocator;
   const roomPart = locator?.roomId ? ` room ${locator.roomId}` : "";
   const storyPart = Number.isFinite(locator?.story) ? ` story ${locator.story}` : "";
   const sourcePart = locator?.source ? ` (${locator.source})` : "";
-  setMapStatus(`Selected ${parsed.kind} ${parsed.id}${roomPart}${storyPart}${sourcePart}`);
+  const multiSuffix = multiSelectedUids.size > 1 ? ` (+${multiSelectedUids.size - 1} more)` : "";
+  setMapStatus(`Selected ${primaryParsed.kind} ${primaryParsed.id}${roomPart}${storyPart}${sourcePart}${multiSuffix}`);
 
   if (focus) {
     const center = cornersCenter(locator?.corners);
@@ -256,16 +579,386 @@ function selectElementByUid(uid, { focus = true, updateHash = true } = {}) {
     }
   }
 
-  showLineagePanel(parsed, locator);
+  showLineagePanel(primaryParsed, locator);
+  if (primaryParsed.kind === 'v3-roof-proposal' || primaryParsed.kind === 'v3-merged-roof-segment') {
+    showProposalPanel(primaryParsed, locator, primaryMesh);
+    refreshQueueIndexFromSelection(primaryParsed);
+  } else {
+    hideProposalPanel();
+  }
 
-  if (updateHash) updateElementHash(parsed.uid);
-  document.title = `${addr} - ${parsed.kind} ${parsed.id} - 3D Viewer`;
+  if (updateHash) updateElementHash(primaryParsed.uid);
+  document.title = `${addr} - ${primaryParsed.kind} ${primaryParsed.id} - 3D Viewer`;
   return true;
+}
+
+const PROPOSAL_REASON_CHIPS = [
+  'wrong-azimuth',
+  'wrong-footprint',
+  'should-be-flat',
+  'not-a-roof',
+  'covers-wrong-room',
+];
+
+let proposalPanelState = null;
+
+function formatProposalFeatureValue(value) {
+  if (value === null || value === undefined) return '—';
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return String(value);
+    if (Number.isInteger(value)) return String(value);
+    return value.toFixed(3);
+  }
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  return String(value);
+}
+
+function showProposalPanel(parsed, locator, mesh) {
+  const panel = document.getElementById('proposal-panel');
+  if (!panel) return;
+  const kv = document.getElementById('proposal-kv');
+  const heuristic = document.getElementById('proposal-heuristic');
+  const reasonsEl = document.getElementById('proposal-reasons');
+  const statusEl = document.getElementById('proposal-status');
+  if (!kv || !heuristic || !reasonsEl || !statusEl) return;
+
+  const features = locator?.features || {};
+  const heuristicLabel = locator?.heuristicLabel || 'not_evaluated';
+  const proposalId = locator?.proposalId || parsed.uid;
+  const buildingUuid = parsed.buildingUuid;
+  const currentLabel = (roofProposalLabelsByUuid[buildingUuid] || {})[proposalId] || 'unlabeled';
+
+  const h3 = panel.querySelector('h3');
+  if (h3) {
+    h3.textContent = multiSelectedUids.size > 1
+      ? `V3 Roof Proposal — ${multiSelectedUids.size} selected`
+      : 'V3 Roof Proposal';
+  }
+
+  const keys = Object.keys(features).sort();
+  let kvHtml = '';
+  for (const k of keys) {
+    kvHtml += `<div class="k">${k}</div><div class="v">${formatProposalFeatureValue(features[k])}</div>`;
+  }
+  kv.innerHTML = kvHtml || '<div class="k">No features</div><div class="v">—</div>';
+
+  // Phase 7: surface the model's score and autonomy verdict alongside the
+  // legacy heuristic. Looking up in `proposalQueue` (loaded from the
+  // scored mirror JSON) keeps this decoupled from the in-memory V3 payload.
+  const rawId = rawProposalIdOf(proposalId);
+  const qEntry = proposalQueue.find((p) => p.proposal_id === rawId);
+  const autoLabel = qEntry?.autonomy_label;
+  const score = typeof qEntry?.score === 'number' ? qEntry.score : null;
+  let autoHtml = '';
+  if (autoLabel) {
+    const color = autoLabel === 'auto_accept' ? '#4a9' : autoLabel === 'auto_reject' ? '#c66' : '#d90';
+    const scoreTxt = score !== null ? score.toFixed(3) : '—';
+    const ruleTxt = qEntry?.rule_fires ? ' <em>(rule)</em>' : '';
+    autoHtml = ` &middot; <span style="color:${color}">model: <strong>${autoLabel}</strong> (${scoreTxt})${ruleTxt}</span>`;
+  }
+  heuristic.innerHTML = `heuristic: <strong>${heuristicLabel}</strong> &middot; current: <strong>${currentLabel}</strong>${autoHtml}`;
+
+  const activeReasons = new Set();
+  let reasonsHtml = '';
+  for (const r of PROPOSAL_REASON_CHIPS) {
+    reasonsHtml += `<span class="reason-chip" data-reason="${r}">${r}</span>`;
+  }
+  reasonsEl.innerHTML = reasonsHtml;
+  reasonsEl.querySelectorAll('.reason-chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const r = chip.dataset.reason;
+      if (activeReasons.has(r)) {
+        activeReasons.delete(r);
+        chip.classList.remove('on');
+      } else {
+        activeReasons.add(r);
+        chip.classList.add('on');
+      }
+    });
+  });
+
+  statusEl.textContent = '';
+
+  proposalPanelState = {
+    parsed, locator, mesh, features, heuristicLabel, proposalId, buildingUuid, activeReasons,
+  };
+  if (splitModeState && splitModeState.proposalId !== proposalId) {
+    exitSplitMode();
+  }
+  panel.classList.add('visible');
+}
+
+function hideProposalPanel() {
+  const panel = document.getElementById('proposal-panel');
+  if (panel) panel.classList.remove('visible');
+  proposalPanelState = null;
+  if (splitModeState) exitSplitMode();
+}
+
+async function submitLabelForMesh(mesh, parsed, label, activeReasons) {
+  const locator = mesh.userData?.elementLocator || {};
+  const buildingUuid = parsed.buildingUuid;
+  const proposalId = locator.proposalId || parsed.uid;
+  const features = locator.features || {};
+  const heuristicLabel = locator.heuristicLabel || 'not_evaluated';
+
+  // Walk sibling meshes on the same cluster-side so the label captures the
+  // multi-polygon of post-split 3D corners contributed by each cluster
+  // member. Dedupe by parent proposal id (fill Mesh + edge Line share a
+  // locator) so each member contributes exactly one piece polygon.
+  const sidePieces = [];
+  const seenMemberIds = new Set();
+  const parent = mesh.parent;
+  if (parent) {
+    for (const child of parent.children) {
+      const loc = child.userData?.elementLocator;
+      if (!loc || loc.proposalId !== proposalId) continue;
+      if (!Array.isArray(loc.corners) || loc.corners.length < 3) continue;
+      if (child.type !== 'Mesh') continue;
+      const memberId = loc.parentProposalId;
+      if (memberId && seenMemberIds.has(memberId)) continue;
+      if (memberId) seenMemberIds.add(memberId);
+      sidePieces.push({
+        parent_proposal_id: memberId ?? null,
+        piece_corners_xyz: loc.corners.map((c) => [...c]),
+      });
+    }
+  }
+
+  const body = {
+    building_uuid: buildingUuid,
+    proposal_id: proposalId,
+    label,
+    reasons: Array.from(activeReasons || []),
+    features_snapshot: features,
+    heuristic_label: heuristicLabel,
+    // Rich snapshot so the JSONL is self-contained for reverse engineering:
+    // downstream code can rebuild the merged plane, its members, the seams
+    // that clipped this piece (rain intersection with opposing planes +
+    // room/gap boundary split + building-boundary clip), and the merge
+    // thresholds — without re-running the proposer or viewer.
+    merge_mode: !!locator.mergeMode,
+    kind: locator.kind || null,
+    cluster_canonical_id: locator.clusterCanonicalId || null,
+    part_index: locator.partIndex ?? 0,
+    part_count: locator.partCount ?? 1,
+    merged_plane: locator.mergedPlane || locator.plane || null,
+    cluster_members: locator.clusterMembers || [],
+    member_proposal_ids: locator.memberProposalIds || [],
+    cluster_params: locator.clusterParams || null,
+    opposing_cluster_canonicals: locator.opposingClusterCanonicals || [],
+    opposing_planes: locator.opposingPlanes || [],
+    room_boundary_refs: locator.roomBoundaryRefs || [],
+    building_boundary_xz: locator.buildingBoundaryXz || null,
+    segment_corners_xyz: Array.isArray(locator.corners)
+      ? locator.corners.map((c) => [...c])
+      : null,
+    side_pieces: sidePieces,
+  };
+
+  try {
+    const resp = await fetch('v3-roof-proposal-label', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) throw new Error(`label save failed: ${resp.status}`);
+    if (!roofProposalLabelsByUuid[buildingUuid]) {
+      roofProposalLabelsByUuid[buildingUuid] = {};
+    }
+    roofProposalLabelsByUuid[buildingUuid][proposalId] = label;
+    const qIdx = findQueueIndexByProposalId(proposalId);
+    if (qIdx >= 0) proposalQueue[qIdx].label = label;
+    recolorProposalMesh(mesh, label);
+    return true;
+  } catch (err) {
+    console.warn('Failed to save proposal label', err);
+    return false;
+  }
+}
+
+async function submitProposalLabel(label, { autoAdvance = false } = {}) {
+  const state = proposalPanelState;
+  const statusEl = document.getElementById('proposal-status');
+
+  // Collect targets from the multi-select set. Fall back to the primary
+  // when the set is unexpectedly empty but a panel is open.
+  const uids = Array.from(multiSelectedUids);
+  if (uids.length === 0 && state?.parsed?.uid) uids.push(state.parsed.uid);
+  if (uids.length === 0) return;
+
+  if (statusEl) {
+    statusEl.textContent = uids.length > 1
+      ? `Saving ${label} to ${uids.length} segments…`
+      : `Saving ${label}…`;
+  }
+
+  const reasons = state?.activeReasons || new Set();
+  let saved = 0;
+  for (const uid of uids) {
+    const parsed = parseElementUid(uid);
+    const mesh = resolveMeshByUid(uid);
+    if (!parsed || !mesh) continue;
+    const ok = await submitLabelForMesh(mesh, parsed, label, reasons);
+    if (ok) saved += 1;
+  }
+  updateQueueBarCounter();
+
+  if (uids.length > 1) {
+    if (statusEl) statusEl.textContent = `Saved ${label} to ${saved}/${uids.length}.`;
+    multiSelectedUids.clear();
+    rebuildSelectionHighlights();
+    const h3 = document.getElementById('proposal-panel')?.querySelector('h3');
+    if (h3) h3.textContent = 'V3 Roof Proposal';
+  } else {
+    if (statusEl) statusEl.textContent = saved ? `Saved ${label}.` : `Error saving ${label}.`;
+    const heuristic = document.getElementById('proposal-heuristic');
+    if (heuristic && state) {
+      const rawId = rawProposalIdOf(state.proposalId);
+      const qEntry = proposalQueue.find((p) => p.proposal_id === rawId);
+      const autoLabel = qEntry?.autonomy_label;
+      const score = typeof qEntry?.score === 'number' ? qEntry.score : null;
+      let autoHtml = '';
+      if (autoLabel) {
+        const color = autoLabel === 'auto_accept' ? '#4a9' : autoLabel === 'auto_reject' ? '#c66' : '#d90';
+        const scoreTxt = score !== null ? score.toFixed(3) : '—';
+        const ruleTxt = qEntry?.rule_fires ? ' <em>(rule)</em>' : '';
+        autoHtml = ` &middot; <span style="color:${color}">model: <strong>${autoLabel}</strong> (${scoreTxt})${ruleTxt}</span>`;
+      }
+      heuristic.innerHTML = `heuristic: <strong>${state.heuristicLabel}</strong> &middot; current: <strong>${label}</strong>${autoHtml}`;
+    }
+  }
+
+  if (autoAdvance) stepQueue(1, { onlyUnlabeled: true });
+}
+
+let splitModeState = null;
+
+function enterSplitMode() {
+  const state = proposalPanelState;
+  if (!state) return;
+  splitModeState = {
+    buildingUuid: state.buildingUuid,
+    proposalId: state.proposalId,
+    points: [],
+  };
+  const statusEl = document.getElementById('proposal-status');
+  if (statusEl) statusEl.textContent = 'Split mode: click 2 points on the polygon (Esc to cancel).';
+  const btn = document.getElementById('proposal-split');
+  if (btn) btn.classList.add('active');
+  const canvas = document.getElementById('c');
+  if (canvas) canvas.style.cursor = 'crosshair';
+}
+
+function exitSplitMode(message = '') {
+  splitModeState = null;
+  const btn = document.getElementById('proposal-split');
+  if (btn) btn.classList.remove('active');
+  const canvas = document.getElementById('c');
+  if (canvas) canvas.style.cursor = '';
+  if (message) {
+    const statusEl = document.getElementById('proposal-status');
+    if (statusEl) statusEl.textContent = message;
+  }
+}
+
+function toggleSplitMode() {
+  if (splitModeState) {
+    exitSplitMode('Split cancelled.');
+  } else {
+    enterSplitMode();
+  }
+}
+
+async function submitProposalSplit(p1, p2) {
+  const state = splitModeState;
+  if (!state) return;
+  const statusEl = document.getElementById('proposal-status');
+  if (statusEl) statusEl.textContent = 'Splitting…';
+  try {
+    const resp = await fetch('v3-roof-proposal-split', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        building_uuid: state.buildingUuid,
+        parent_proposal_id: state.proposalId,
+        split_line: [p1, p2],
+      }),
+    });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      throw new Error(`split failed: ${resp.status} ${errText}`);
+    }
+    const data = await resp.json();
+    const children = Array.isArray(data?.children) ? data.children : [];
+    if (children.length < 2) throw new Error('split returned no children');
+
+    const splitRecord = {
+      parent_id: state.proposalId,
+      split_line: [p1, p2],
+      children: children.map((c) => ({ id: c.id, corners: c.corners })),
+    };
+    if (!Array.isArray(roofProposalSplitsByUuid[state.buildingUuid])) {
+      roofProposalSplitsByUuid[state.buildingUuid] = [];
+    }
+    roofProposalSplitsByUuid[state.buildingUuid].push(splitRecord);
+
+    const parentIdx = findQueueIndexByProposalId(state.proposalId);
+    if (parentIdx >= 0) {
+      const addr = proposalQueue[parentIdx].address || '';
+      const replacement = children.map((c) => ({
+        building_uuid: state.buildingUuid,
+        address: addr,
+        proposal_id: c.id,
+        heuristic_label: c.heuristic_label,
+        label: 'unlabeled',
+      }));
+      proposalQueue.splice(parentIdx, 1, ...replacement);
+      proposalQueueIndex = parentIdx;
+    }
+
+    const bldg = DATA[currentBuilding];
+    if (bldg && bldg.uuid === state.buildingUuid) {
+      renderV3ForBuilding(bldg);
+    }
+    exitSplitMode(`Split into ${children.length} pieces.`);
+    updateQueueBarCounter();
+    await selectElementByUid(children[0].id, { focus: true, updateHash: true });
+  } catch (err) {
+    console.warn('Split failed', err);
+    exitSplitMode(`Split error: ${err.message || err}`);
+  }
+}
+
+function recolorProposalMesh(mesh, label) {
+  if (!mesh) return;
+  const color = proposalColor(label);
+  if (mesh.material && mesh.material.color) {
+    mesh.material.color.setHex(color);
+    mesh.material.needsUpdate = true;
+  }
+  const parent = mesh.parent;
+  if (!parent) return;
+  // Labels apply per rain-exposed segment (one proposal = one label), so
+  // only recolor siblings that share this exact elementUid — i.e. the
+  // same piece's fill Mesh and edge Line. Sibling proposals that happen
+  // to be coplanar keep their own color.
+  const locatorUid = mesh.userData?.elementUid;
+  if (!locatorUid) return;
+  for (const child of parent.children) {
+    if (child === mesh) continue;
+    if (child.userData?.elementUid !== locatorUid) continue;
+    if (child.material && child.material.color) {
+      child.material.color.setHex(color);
+      child.material.needsUpdate = true;
+    }
+  }
 }
 
 function showLineagePanel(parsed, locator) {
   const panel = document.getElementById("lineage-panel");
   const content = document.getElementById("lineage-content");
+  if (!panel || !content) return;
   const lineage = locator?.lineage;
   if (!lineage || lineage.length === 0) {
     panel.classList.remove("visible");
@@ -286,10 +979,236 @@ function showLineagePanel(parsed, locator) {
 }
 
 function hideLineagePanel() {
-  document.getElementById("lineage-panel").classList.remove("visible");
+  const panel = document.getElementById("lineage-panel");
+  if (panel) panel.classList.remove("visible");
 }
 
-function jumpToElementUid(uid, { focus = true, updateHash = true } = {}) {
+document.querySelectorAll('#proposal-panel .action').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const label = btn.dataset.label;
+    if (label) submitProposalLabel(label);
+  });
+});
+
+let proposalQueue = [];
+let proposalQueueIndex = -1;
+
+async function ensureProposalQueue() {
+  if (proposalQueue.length > 0) return proposalQueue;
+  try {
+    const resp = await fetch('v3-roof-proposal-queue', { cache: 'no-store' });
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    proposalQueue = Array.isArray(data?.proposals) ? data.proposals : [];
+  } catch (err) {
+    console.warn('Failed to load proposal queue', err);
+    proposalQueue = [];
+  }
+  return proposalQueue;
+}
+
+function updateQueueBarCounter() {
+  const counter = document.getElementById('queue-counter');
+  if (!counter) return;
+  if (proposalQueue.length === 0) {
+    counter.innerHTML = 'No proposals';
+    return;
+  }
+  const labeled = proposalQueue.filter((p) => p.label && p.label !== 'unlabeled').length;
+  const idx = proposalQueueIndex >= 0 ? proposalQueueIndex + 1 : 0;
+  const review = proposalQueue.filter((p) => p.autonomy_label === 'review').length;
+  const autoAcc = proposalQueue.filter((p) => p.autonomy_label === 'auto_accept').length;
+  const autoRej = proposalQueue.filter((p) => p.autonomy_label === 'auto_reject').length;
+  const scored = review + autoAcc + autoRej > 0;
+  if (scored) {
+    counter.innerHTML = (
+      `<strong>${idx}</strong> / ${proposalQueue.length} &middot; ` +
+      `${labeled} labeled &middot; ` +
+      `<span title="review queue">${review} review</span> &middot; ` +
+      `<span title="auto-accept" style="color:#4a9">${autoAcc}✓</span> ` +
+      `<span title="auto-reject" style="color:#c66">${autoRej}✗</span>`
+    );
+  } else {
+    counter.innerHTML = `<strong>${idx}</strong> / ${proposalQueue.length} &middot; ${labeled} labeled`;
+  }
+}
+
+function setQueueBarVisible(visible) {
+  const bar = document.getElementById('queue-bar');
+  if (!bar) return;
+  if (visible) {
+    bar.classList.add('visible');
+    ensureProposalQueue().then(() => updateQueueBarCounter());
+  } else {
+    bar.classList.remove('visible');
+  }
+}
+
+async function navigateToProposal(proposalId, { focus = true, updateHash = true } = {}) {
+  const parsed = parseElementUid(proposalId);
+  if (!parsed) return false;
+  const targetIdx = buildingIndexByUuid.get(parsed.buildingUuid);
+  if (!Number.isInteger(targetIdx)) return false;
+  if (currentBuilding !== targetIdx) {
+    loadBuilding(targetIdx, { resetPipeline: false });
+  }
+  const proposalsToggle = document.getElementById('show-v3-roof-proposals');
+  if (proposalsToggle && !proposalsToggle.checked) {
+    proposalsToggle.checked = true;
+    proposalsToggle.dispatchEvent(new Event('change'));
+  }
+  const bldg = DATA[currentBuilding];
+  if (!bldg) return false;
+  await Promise.all([
+    ensureV3Payload(bldg.uuid),
+    ensureRoofProposalLabels(bldg.uuid),
+    ensureRoofProposalSplits(bldg.uuid),
+  ]);
+  if (!DATA[currentBuilding] || DATA[currentBuilding].uuid !== bldg.uuid) return false;
+  renderV3ForBuilding(bldg);
+  return selectElementByUid(proposalId, { focus, updateHash });
+}
+
+// Strip any `#...` piece suffix (opposing-seam `#side-<bits>` and user-drawn
+// manual-split `#<n>`) so piece ids map back to their parent proposal id for
+// queue indexing.
+function rawProposalIdOf(proposalId) {
+  if (typeof proposalId !== 'string') return proposalId;
+  const hash = proposalId.indexOf('#');
+  return hash < 0 ? proposalId : proposalId.slice(0, hash);
+}
+
+function findQueueIndexByProposalId(proposalId) {
+  const rawId = rawProposalIdOf(proposalId);
+  for (let i = 0; i < proposalQueue.length; i += 1) {
+    if (proposalQueue[i].proposal_id === rawId) return i;
+  }
+  return -1;
+}
+
+// A proposal counts as labeled for queue-advance purposes if its raw id
+// OR any `<id>#part-...` piece (disjoint rain-exposed sub-region) has a
+// non-unlabeled entry. Labels are per rain-exposed segment; no cluster
+// aggregation.
+function isProposalLabeledInMap(buildingUuid, rawId) {
+  const labels = roofProposalLabelsByUuid[buildingUuid] || {};
+  const direct = labels[rawId];
+  if (direct && direct !== 'unlabeled') return true;
+  const prefix = `${rawId}#part-`;
+  for (const key of Object.keys(labels)) {
+    if (key.startsWith(prefix) && labels[key] && labels[key] !== 'unlabeled') return true;
+  }
+  return false;
+}
+
+async function stepQueue(delta, { onlyUnlabeled = false } = {}) {
+  await ensureProposalQueue();
+  if (proposalQueue.length === 0) return;
+  let start = proposalQueueIndex;
+  if (start < 0) start = delta >= 0 ? -1 : proposalQueue.length;
+  const n = proposalQueue.length;
+  for (let step = 1; step <= n; step += 1) {
+    const idx = ((start + delta * step) % n + n) % n;
+    const p = proposalQueue[idx];
+    if (onlyUnlabeled) {
+      if (isProposalLabeledInMap(p.building_uuid, p.proposal_id)) continue;
+      if (p.label && p.label !== 'unlabeled') continue;
+      // Phase 7: proposals the classifier is confident about are treated
+      // as already handled — surfacing them for a human decision is the
+      // opposite of what autonomy is supposed to achieve. They remain in
+      // the queue so a user can still jump to them by ID for audit.
+      if (p.autonomy_label === 'auto_accept' || p.autonomy_label === 'auto_reject') continue;
+    }
+    proposalQueueIndex = idx;
+    updateQueueBarCounter();
+    await navigateToProposal(p.proposal_id);
+    return;
+  }
+  const status = document.getElementById('proposal-status');
+  if (status) status.textContent = 'No more unlabeled proposals.';
+}
+
+function refreshQueueIndexFromSelection(parsed) {
+  if (!parsed) return;
+  if (parsed.kind !== 'v3-roof-proposal' && parsed.kind !== 'v3-merged-roof-segment') return;
+  const idx = findQueueIndexByProposalId(parsed.uid);
+  if (idx >= 0) {
+    proposalQueueIndex = idx;
+    updateQueueBarCounter();
+  }
+}
+
+async function stepBuilding(delta) {
+  await ensureProposalQueue();
+  if (!Array.isArray(DATA) || DATA.length === 0) return;
+  const n = DATA.length;
+  const start = Number.isInteger(currentBuilding) ? currentBuilding : 0;
+  for (let step = 1; step <= n; step += 1) {
+    const idx = ((start + delta * step) % n + n) % n;
+    const bldg = DATA[idx];
+    if (!bldg?.uuid) continue;
+    const unlabeled = proposalQueue.find((p) => {
+      if (p.building_uuid !== bldg.uuid) return false;
+      if (isProposalLabeledInMap(p.building_uuid, p.proposal_id)) return false;
+      return !p.label || p.label === 'unlabeled';
+    });
+    const target = unlabeled || proposalQueue.find((p) => p.building_uuid === bldg.uuid);
+    if (target) {
+      const qIdx = findQueueIndexByProposalId(target.proposal_id);
+      if (qIdx >= 0) proposalQueueIndex = qIdx;
+      updateQueueBarCounter();
+      await navigateToProposal(target.proposal_id);
+      return;
+    }
+    loadBuilding(idx, { resetPipeline: false });
+    const proposalsToggle = document.getElementById('show-v3-roof-proposals');
+    if (proposalsToggle && !proposalsToggle.checked) {
+      proposalsToggle.checked = true;
+      proposalsToggle.dispatchEvent(new Event('change'));
+    }
+    return;
+  }
+}
+
+document.getElementById('queue-prev')?.addEventListener('click', () => stepQueue(-1));
+document.getElementById('queue-next')?.addEventListener('click', () => stepQueue(1));
+document.getElementById('queue-next-unlabeled')?.addEventListener('click', () => stepQueue(1, { onlyUnlabeled: true }));
+
+const PROPOSAL_KEY_LABELS = { a: 'accepted', r: 'rejected', s: 'skipped' };
+
+document.addEventListener('keydown', (event) => {
+  const t = event.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+  const key = event.key.toLowerCase();
+  if (key === 'escape' && splitModeState) {
+    event.preventDefault();
+    exitSplitMode('Split cancelled.');
+    return;
+  }
+  if (proposalPanelState && key === 'x') {
+    event.preventDefault();
+    toggleSplitMode();
+    return;
+  }
+  if (proposalPanelState && key in PROPOSAL_KEY_LABELS) {
+    event.preventDefault();
+    submitProposalLabel(PROPOSAL_KEY_LABELS[key], { autoAdvance: true });
+    return;
+  }
+  const bar = document.getElementById('queue-bar');
+  const queueActive = bar && bar.classList.contains('visible');
+  if (!queueActive) return;
+  if (key === 'n') { event.preventDefault(); stepQueue(1, { onlyUnlabeled: true }); }
+  else if (key === 'j' || key === 'arrowleft') { event.preventDefault(); stepQueue(-1); }
+  else if (key === 'k' || key === 'arrowright') { event.preventDefault(); stepQueue(1); }
+  else if (key === 'arrowdown') { event.preventDefault(); stepBuilding(1); }
+  else if (key === 'arrowup') { event.preventDefault(); stepBuilding(-1); }
+});
+
+document.getElementById('proposal-split')?.addEventListener('click', () => toggleSplitMode());
+
+function jumpToElementUid(uid, { focus = true, updateHash = true, additive = false } = {}) {
   const parsed = parseElementUid(uid);
   if (!parsed) return false;
   const targetIndex = buildingIndexByUuid.get(parsed.buildingUuid);
@@ -298,7 +1217,7 @@ function jumpToElementUid(uid, { focus = true, updateHash = true } = {}) {
   if (currentBuilding !== targetIndex) {
     loadBuilding(targetIndex, { resetPipeline: false });
   }
-  return selectElementByUid(parsed.uid, { focus, updateHash });
+  return selectElementByUid(parsed.uid, { focus, updateHash, additive });
 }
 
 async function copyText(text) {
@@ -338,6 +1257,12 @@ let groups = {
   wallClips: new THREE.Group(),
   extGaps: new THREE.Group(),
   ceilings: new THREE.Group(),
+  rawCeilings: new THREE.Group(),
+  rawCeilingsRoles: new THREE.Group(),
+  rawCeilingsReconstructions: new THREE.Group(),
+  computedOverextend: new THREE.Group(),
+  rawDisagreement: new THREE.Group(),
+  ceilingReplacement: new THREE.Group(),
   thermalCeilings: new THREE.Group(),
   crossStory: new THREE.Group(),
   roofClusters: new THREE.Group(),
@@ -347,6 +1272,12 @@ let groups = {
   ontologyContinuation: new THREE.Group(),
   ontologyCells: new THREE.Group(),
   fullModel: new THREE.Group(),
+  v3Model: new THREE.Group(),
+  v3Proposals: new THREE.Group(),
+  gableExtension: new THREE.Group(),
+  candidateFaces: new THREE.Group(),
+  reconstruction: new THREE.Group(),
+  ridgeEave: new THREE.Group(),
   selection: new THREE.Group(),
 };
 scene.add(groups.merged);
@@ -360,6 +1291,12 @@ scene.add(groups.overlaps);
 scene.add(groups.wallClips);
 scene.add(groups.extGaps);
 scene.add(groups.ceilings);
+scene.add(groups.rawCeilings);
+scene.add(groups.rawCeilingsRoles);
+scene.add(groups.rawCeilingsReconstructions);
+scene.add(groups.computedOverextend);
+scene.add(groups.rawDisagreement);
+scene.add(groups.ceilingReplacement);
 scene.add(groups.thermalCeilings);
 scene.add(groups.crossStory);
 scene.add(groups.roofClusters);
@@ -369,6 +1306,12 @@ scene.add(groups.ontologySemantics);
 scene.add(groups.ontologyContinuation);
 scene.add(groups.ontologyCells);
 scene.add(groups.fullModel);
+scene.add(groups.v3Model);
+scene.add(groups.v3Proposals);
+scene.add(groups.gableExtension);
+scene.add(groups.candidateFaces);
+scene.add(groups.reconstruction);
+scene.add(groups.ridgeEave);
 scene.add(groups.selection);
 groups.overlaps.visible = false;
 groups.fullModel.visible = false;
@@ -379,11 +1322,22 @@ groups.crossStory.visible = false;
 groups.extGaps.visible = false;
 groups.ceilings.visible = false;
 groups.thermalCeilings.visible = false;
+groups.rawCeilingsRoles.visible = false;
+groups.rawCeilingsReconstructions.visible = false;
+groups.computedOverextend.visible = false;
+groups.rawDisagreement.visible = false;
+groups.ceilingReplacement.visible = false;
 groups.fullModelHeuristicRoof.visible = false;
 groups.fullModelOntology.visible = false;
 groups.ontologySemantics.visible = false;
 groups.ontologyContinuation.visible = false;
 groups.ontologyCells.visible = false;
+groups.v3Model.visible = false;
+groups.v3Proposals.visible = false;
+groups.gableExtension.visible = false;
+groups.candidateFaces.visible = false;
+groups.reconstruction.visible = false;
+groups.ridgeEave.visible = false;
 groups.selection.visible = true;
 
 let pipelineStepIndex = 0;
@@ -419,6 +1373,36 @@ function setLayerVisibility(layer, visible, syncControls = true) {
   }
   if (layer === 'ontologySemantics' || layer === 'ontologyContinuation' || layer === 'ontologyCells') {
     updateOntologyStatusInfo();
+  }
+  if (visible && (layer === 'ontologySemantics' || layer === 'ontologyContinuation' || layer === 'ontologyCells' || layer === 'fullModel')) {
+    maybeLoadOntologyForCurrentBuilding();
+  }
+  if (visible && (layer === 'v3Model' || layer === 'v3Proposals')) {
+    maybeLoadV3ForCurrentBuilding();
+  }
+  if (visible && layer === 'candidateFaces') {
+    maybeLoadCandidateFacesForCurrentBuilding();
+  }
+  if (visible && layer === 'reconstruction') {
+    maybeLoadReconstructionForCurrentBuilding();
+  }
+  if (visible && layer === 'ridgeEave') {
+    maybeLoadRidgeEaveForCurrentBuilding();
+  }
+  if (visible && (layer === 'rawCeilingsRoles' || layer === 'rawCeilingsReconstructions')) {
+    maybeLoadRawCeilingPrototypeForCurrentBuilding();
+  }
+  if (visible && layer === 'computedOverextend') {
+    maybeLoadComputedOverextendForCurrentBuilding();
+  }
+  if (visible && layer === 'rawDisagreement') {
+    maybeLoadRawDisagreementForCurrentBuilding();
+  }
+  if (visible && layer === 'ceilingReplacement') {
+    maybeLoadCeilingReplacementForCurrentBuilding();
+  }
+  if (layer === 'v3Proposals') {
+    setQueueBarVisible(visible);
   }
 }
 
@@ -513,6 +1497,42 @@ function renderLegend() {
     html += `<span style="background:#e11d48"></span>Perimeter walls `;
     html += `<span style="background:#ff006e"></span>Knee walls `;
   }
+  if (document.getElementById('show-v3-model')?.checked) {
+    html += '<br>';
+    html += `<span style="background:#fbbf24"></span>V3 slab `;
+    html += `<span style="background:#7da8d6"></span>V3 flat ceiling `;
+    html += `<span style="background:#9ec5e3"></span>V3 slanted roof `;
+    html += `<span style="background:#a78bfa"></span>V3 wall extension `;
+    html += `<span style="background:#34d399"></span>V3 gap (closed) `;
+    html += `<span style="background:#f472b6"></span>V3 dormer `;
+    html += `<span style="background:#ff00ff"></span>V3 unresolved `;
+  }
+  if (document.getElementById('show-v3-roof-proposals')?.checked) {
+    html += '<br>';
+    html += `<span style="background:#94a3b8"></span>Roof proposal (unlabeled) `;
+    html += `<span style="background:#22c55e"></span>Accepted `;
+    html += `<span style="background:#ef4444"></span>Rejected `;
+    html += `<span style="background:#64748b"></span>Skipped `;
+  }
+  if (document.getElementById('show-candidate-faces')?.checked) {
+    html += '<br>';
+    html += `<span style="background:#38bdf8"></span>Candidate face (original) `;
+    html += `<span style="background:#fb923c"></span>Candidate face (ridge-extended) `;
+  }
+  if (document.getElementById('show-reconstruction')?.checked) {
+    html += '<br>';
+    html += `<span style="background:#22c55e"></span>BIP envelope (auto-accept) `;
+    html += `<span style="background:#f59e0b"></span>BIP envelope (review) `;
+  }
+  if (document.getElementById('show-ridge-eave')?.checked) {
+    html += '<br>';
+    html += `<span style="background:#ef4444"></span>Score 0 `;
+    html += `<span style="background:#facc15"></span>Score 0.5 `;
+    html += `<span style="background:#22c55e"></span>Score 1 `;
+    html += `<span style="background:#ffd700"></span>Ridge `;
+    html += `<span style="background:#fb923c"></span>Eaves `;
+    html += `<span style="background:#6366f1"></span>Part OBB `;
+  }
   legendBox.innerHTML = html;
 }
 
@@ -550,9 +1570,16 @@ function updateFullModelReferencePresentation(bldg) {
   if (!bldg?.uuid) return;
   const showFullModel = !!document.getElementById('show-full-model')?.checked;
   const enhancement = fullModelEnhancementByUuid[bldg.uuid] || null;
-  const ghostBaseline = showFullModel && !!enhancement?.hasEnhancement;
-  setGroupGhostState(groups.fullModel, ghostBaseline, fullModelDiffModeEnabled ? 0.14 : 0.22, 0.035);
-  setGroupGhostState(groups.fullModelHeuristicRoof, ghostBaseline, fullModelDiffModeEnabled ? 0.18 : 0.24, 0.05);
+  // The heuristic shell (walls, floors, 3D windows, 3D doors) stays visible —
+  // it carries gap closures and wall-extension geometry that the simplified
+  // ontology base_* surfaces drop. The ontology layer only overlays ceilings,
+  // roofs, attic floors, and knee walls. If the ontology delivers roof surfaces
+  // we hide the heuristic roof to avoid a double-render.
+  groups.fullModel.visible = showFullModel;
+  groups.fullModelHeuristicRoof.visible = showFullModel && !enhancement?.hasRoofReplacement;
+  groups.fullModelOntology.visible = showFullModel && !!enhancement?.hasEnhancement;
+  setGroupGhostState(groups.fullModel, false, 1.0, 0.035);
+  setGroupGhostState(groups.fullModelHeuristicRoof, false, 1.0, 0.05);
 }
 
 function getOntologyLoadState(uuid) {
@@ -626,6 +1653,7 @@ function updateOntologyStatusInfo() {
   const partCount = Array.isArray(summary?.building_parts) ? summary.building_parts.length : 0;
   const selectedPartId = getSelectedOntologyPartId(bldg.uuid) || getDefaultOntologyPartId(summary);
   const enhancement = fullModelEnhancementByUuid[bldg.uuid] || null;
+  const fullModelPayload = fullModelPayloadByUuid[bldg.uuid] || null;
   const summaryLine = summary
     ? `Ontology summary: ${summary.metadata?.oblique_coverage_patch_count || 0} slope patches, ${summary.metadata?.roof_continuation_region_count || 0} continuation regions, ${summary.metadata?.coverage_subpart_count || 0} subparts, ${summary.metadata?.unresolved_region_count || 0} unresolved`
     : 'Ontology summary: not loaded';
@@ -638,7 +1666,9 @@ function updateOntologyStatusInfo() {
   const fullModelLine = showFullModel
     ? (enhancement
       ? `Full model ontology: ${enhancement.hasEnhancement ? 'active' : 'no exact replacement'}${enhancement.hasEnhancement ? ` (${enhancement.roofFaceCount} roof faces, ${enhancement.baseWallCount} base walls, ${enhancement.baseFloorCount} base floors, ${enhancement.fenestrationCount} fenestration surfaces, ${enhancement.exteriorWallCount} scaffold exterior walls, ${enhancement.occupiedSurfaceCount} scaffold occupied-room surfaces, ${enhancement.ceilingSurfaceCount} exact semantic ceilings${enhancement.fallbackCeilingCount ? `, ${enhancement.fallbackCeilingCount} fallback ceilings` : ''}, ${enhancement.kneeWallCount} knee walls${enhancement.unresolvedCount ? `, ${enhancement.unresolvedCount} unresolved` : ''}${fullModelDiffModeEnabled ? ', diff mode' : ', heuristic shell ghosted'})` : ''}`
-      : `Full model ontology: loading ${partCount > 0 ? `${loadState.loadedPartIds.size}/${partCount} parts` : 'summary'}`)
+      : fullModelPayload
+        ? 'Full model ontology: loaded, rendering'
+        : 'Full model ontology: loading committed payload')
     : 'Full model ontology: layer hidden';
   document.getElementById('building-info').innerHTML =
     `${buildingInfoBaseHtml}<br><span style="color:#67e8f9">${summaryLine}</span><br><span style="color:#22d3ee">${continuationLine}</span><br><span style="color:#93c5fd">${exactLine}</span><br><span style="color:#c4b5fd">${fullModelLine}</span>`;
@@ -700,18 +1730,21 @@ function renderOntologyExactForBuilding(bldg) {
 function renderFullModelOntologyForBuilding(bldg) {
   disposeGroup(groups.fullModelOntology);
   fullModelEnhancementByUuid[bldg.uuid] = null;
-  const summary = ontologySummaryByUuid[bldg.uuid] || null;
-  const parts = getLoadedOntologyParts(bldg.uuid);
-  if (!summary || parts.length === 0) {
-    groups.fullModel.visible = !!document.getElementById('show-full-model')?.checked;
-    groups.fullModelHeuristicRoof.visible = groups.fullModel.visible;
+  const payload = fullModelPayloadByUuid[bldg.uuid] || null;
+  if (!payload) {
+    ensureOntologyFullModel(bldg.uuid).then(() => {
+      if (!DATA[currentBuilding] || DATA[currentBuilding].uuid !== bldg.uuid) return;
+      renderFullModelOntologyForBuilding(bldg);
+      renderLegend();
+      updateOntologyStatusInfo();
+    });
     updateFullModelReferencePresentation(bldg);
     updateOntologyStatusInfo();
     return null;
   }
   const enhancement = renderOntologyEnhancedFullModel({
-    ontologySummary: summary,
-    ontologyParts: parts,
+    ontologySummary: null,
+    ontologyParts: [payload],
     groups,
     createPolygonMesh,
     createEdgeLoop,
@@ -720,10 +1753,6 @@ function renderFullModelOntologyForBuilding(bldg) {
     diffMode: fullModelDiffModeEnabled,
   });
   fullModelEnhancementByUuid[bldg.uuid] = enhancement;
-  const showFullModel = !!document.getElementById('show-full-model')?.checked;
-  groups.fullModel.visible = showFullModel;
-  groups.fullModelHeuristicRoof.visible = showFullModel;
-  groups.fullModelOntology.visible = showFullModel;
   updateFullModelReferencePresentation(bldg);
   updateOntologyStatusInfo();
   return enhancement;
@@ -765,6 +1794,41 @@ function renderAncillaryBuildingLayers(bldg, pyResult) {
     maybeLoadOntologyForCurrentBuilding();
   } catch (err) {
     console.error('Ontology load trigger failed', bldg?.uuid, err);
+  }
+  try {
+    maybeLoadCandidateFacesForCurrentBuilding();
+  } catch (err) {
+    console.error('Candidate-faces load trigger failed', bldg?.uuid, err);
+  }
+  try {
+    maybeLoadReconstructionForCurrentBuilding();
+  } catch (err) {
+    console.error('Reconstruction load trigger failed', bldg?.uuid, err);
+  }
+  try {
+    maybeLoadRidgeEaveForCurrentBuilding();
+  } catch (err) {
+    console.error('Ridge/eave load trigger failed', bldg?.uuid, err);
+  }
+  try {
+    maybeLoadRawCeilingPrototypeForCurrentBuilding();
+  } catch (err) {
+    console.error('Raw-ceiling prototype load trigger failed', bldg?.uuid, err);
+  }
+  try {
+    maybeLoadComputedOverextendForCurrentBuilding();
+  } catch (err) {
+    console.error('Computed-overextend load trigger failed', bldg?.uuid, err);
+  }
+  try {
+    maybeLoadRawDisagreementForCurrentBuilding();
+  } catch (err) {
+    console.error('Raw-disagreement load trigger failed', bldg?.uuid, err);
+  }
+  try {
+    maybeLoadCeilingReplacementForCurrentBuilding();
+  } catch (err) {
+    console.error('Ceiling-replacement load trigger failed', bldg?.uuid, err);
   }
 }
 
@@ -824,6 +1888,424 @@ function ensureOntologyPart(uuid, partId) {
   return ontologyPartPromiseByUuid[uuid][partId];
 }
 
+let v3PayloadByUuid = {};
+let v3PayloadPromiseByUuid = {};
+let candidateFacesByUuid = {};
+let candidateFacesPromiseByUuid = {};
+let reconstructionByUuid = {};
+let reconstructionPromiseByUuid = {};
+let ridgeEaveScoresByUuid = {};
+let ridgeEaveScoresPromiseByUuid = {};
+let roofProposalLabelsByUuid = {};
+let roofProposalLabelsPromiseByUuid = {};
+let roofProposalSplitsByUuid = {};
+let roofProposalSplitsPromiseByUuid = {};
+
+function ensureRoofProposalSplits(uuid) {
+  if (roofProposalSplitsByUuid[uuid] !== undefined) {
+    return Promise.resolve(roofProposalSplitsByUuid[uuid]);
+  }
+  if (roofProposalSplitsPromiseByUuid[uuid]) return roofProposalSplitsPromiseByUuid[uuid];
+  roofProposalSplitsPromiseByUuid[uuid] = fetch(
+    `v3-roof-proposal-splits?building_uuid=${encodeURIComponent(uuid)}`,
+    { cache: 'no-store' },
+  )
+    .then((resp) => {
+      if (resp.status === 404) return { splits: [] };
+      if (!resp.ok) throw new Error(`splits fetch failed: ${resp.status}`);
+      return resp.json();
+    })
+    .then((data) => {
+      const list = Array.isArray(data?.splits) ? data.splits : [];
+      roofProposalSplitsByUuid[uuid] = list;
+      return list;
+    })
+    .catch((err) => {
+      console.warn('Failed to load roof-proposal splits', uuid, err);
+      roofProposalSplitsByUuid[uuid] = [];
+      return [];
+    })
+    .finally(() => {
+      delete roofProposalSplitsPromiseByUuid[uuid];
+    });
+  return roofProposalSplitsPromiseByUuid[uuid];
+}
+
+function expandProposalsWithSplits(v3Data, splits) {
+  if (!v3Data) return v3Data;
+  const childrenByParent = new Map();
+  const cornersById = new Map();
+  for (const rec of splits || []) {
+    const pid = rec?.parent_id;
+    const kids = rec?.children || [];
+    if (!pid || !Array.isArray(kids) || kids.length < 2) continue;
+    childrenByParent.set(pid, kids.map((c) => c.id));
+    for (const c of kids) {
+      if (c?.id && Array.isArray(c?.corners)) cornersById.set(c.id, c.corners);
+    }
+  }
+  const leavesOf = (pid) => {
+    const kids = childrenByParent.get(pid);
+    if (!kids) return [pid];
+    return kids.flatMap((k) => leavesOf(k));
+  };
+  const expandList = (items) => {
+    const out = [];
+    for (const p of items || []) {
+      for (const leafId of leavesOf(p.id)) {
+        if (leafId === p.id) {
+          out.push(p);
+        } else {
+          const corners = cornersById.get(leafId);
+          if (!corners) continue;
+          out.push({ ...p, id: leafId, corners });
+        }
+      }
+    }
+    return out;
+  };
+  return {
+    ...v3Data,
+    roof_proposals: expandList(v3Data.roof_proposals),
+    merged_roof_segments: expandList(v3Data.merged_roof_segments),
+  };
+}
+
+function ensureRoofProposalLabels(uuid) {
+  if (roofProposalLabelsByUuid[uuid] !== undefined) {
+    return Promise.resolve(roofProposalLabelsByUuid[uuid]);
+  }
+  if (roofProposalLabelsPromiseByUuid[uuid]) return roofProposalLabelsPromiseByUuid[uuid];
+  roofProposalLabelsPromiseByUuid[uuid] = fetch(
+    `v3-roof-proposal-labels?building_uuid=${encodeURIComponent(uuid)}`,
+    { cache: 'no-store' },
+  )
+    .then((resp) => {
+      if (resp.status === 404) return {};
+      if (!resp.ok) throw new Error(`label fetch failed: ${resp.status}`);
+      return resp.json();
+    })
+    .then((data) => {
+      const serverMap = (data && data.labels) || {};
+      // Merge, with any locally-written entries (from a POST that raced the
+      // initial GET) taking precedence. Without this, a late-arriving GET
+      // silently wipes the label the user just saved, which then disappears
+      // from the re-render triggered by auto-advance.
+      const local = roofProposalLabelsByUuid[uuid] || {};
+      roofProposalLabelsByUuid[uuid] = { ...serverMap, ...local };
+      return roofProposalLabelsByUuid[uuid];
+    })
+    .catch((err) => {
+      console.warn('Failed to load roof-proposal labels', uuid, err);
+      if (roofProposalLabelsByUuid[uuid] === undefined) {
+        roofProposalLabelsByUuid[uuid] = {};
+      }
+      return roofProposalLabelsByUuid[uuid];
+    })
+    .finally(() => {
+      delete roofProposalLabelsPromiseByUuid[uuid];
+    });
+  return roofProposalLabelsPromiseByUuid[uuid];
+}
+
+function ensureV3Payload(uuid) {
+  if (v3PayloadByUuid[uuid] !== undefined) {
+    return Promise.resolve(v3PayloadByUuid[uuid]);
+  }
+  if (v3PayloadPromiseByUuid[uuid]) return v3PayloadPromiseByUuid[uuid];
+  v3PayloadPromiseByUuid[uuid] = fetch(
+    `v3?uuid=${encodeURIComponent(uuid)}`,
+    { cache: 'no-store' },
+  )
+    .then((resp) => {
+      if (resp.status === 404) return null;
+      if (!resp.ok) throw new Error(`v3 payload fetch failed: ${resp.status}`);
+      return resp.json();
+    })
+    .then((data) => {
+      v3PayloadByUuid[uuid] = data;
+      return data;
+    })
+    .catch((err) => {
+      console.warn('Failed to load v3 payload', uuid, err);
+      v3PayloadByUuid[uuid] = null;
+      return null;
+    })
+    .finally(() => {
+      delete v3PayloadPromiseByUuid[uuid];
+    });
+  return v3PayloadPromiseByUuid[uuid];
+}
+
+function renderV3ForBuilding(bldg) {
+  if (!bldg?.uuid) return;
+  const v3Prefix = `${bldg.uuid}::v3-`;
+  for (const uid of Array.from(elementMeshByUid.keys())) {
+    if (typeof uid === 'string' && uid.startsWith(v3Prefix)) {
+      elementMeshByUid.delete(uid);
+    }
+  }
+  disposeGroup(groups.v3Model);
+  disposeGroup(groups.gableExtension);
+  disposeGroup(groups.v3Proposals);
+  const payload = v3PayloadByUuid[bldg.uuid];
+  if (!payload) return;
+  renderV3Model({
+    v3Data: payload,
+    groups,
+    createPolygonMesh,
+    createEdgeLoop,
+    createLine,
+    attachLocator,
+    buildingUuid: bldg.uuid,
+  });
+  const expanded = expandProposalsWithSplits(
+    payload,
+    roofProposalSplitsByUuid[bldg.uuid] || [],
+  );
+  renderV3RoofProposals({
+    v3Data: expanded,
+    groups,
+    createPolygonMesh,
+    createEdgeLoop,
+    attachLocator,
+    buildingUuid: bldg.uuid,
+    labelsByProposalId: roofProposalLabelsByUuid[bldg.uuid] || {},
+    mergeSimilarPlanes: !!document.getElementById('merge-v3-roof-proposal-planes')?.checked,
+  });
+}
+
+function maybeLoadV3ForCurrentBuilding() {
+  const bldg = DATA[currentBuilding];
+  if (!bldg?.uuid) return;
+  const showModel = !!document.getElementById('show-v3-model')?.checked;
+  const showProposals = !!document.getElementById('show-v3-roof-proposals')?.checked;
+  if (!showModel && !showProposals) return;
+  Promise.all([
+    ensureV3Payload(bldg.uuid),
+    ensureRoofProposalLabels(bldg.uuid),
+    ensureRoofProposalSplits(bldg.uuid),
+  ]).then(() => {
+    if (!DATA[currentBuilding] || DATA[currentBuilding].uuid !== bldg.uuid) return;
+    renderV3ForBuilding(bldg);
+  });
+}
+
+function ensureCandidateFaces(uuid) {
+  if (candidateFacesByUuid[uuid] !== undefined) {
+    return Promise.resolve(candidateFacesByUuid[uuid]);
+  }
+  if (candidateFacesPromiseByUuid[uuid]) return candidateFacesPromiseByUuid[uuid];
+  candidateFacesPromiseByUuid[uuid] = fetch(
+    `candidate-faces?uuid=${encodeURIComponent(uuid)}`,
+    { cache: 'no-store' },
+  )
+    .then((resp) => {
+      if (resp.status === 404) return null;
+      if (!resp.ok) throw new Error(`candidate-faces fetch failed: ${resp.status}`);
+      return resp.json();
+    })
+    .then((data) => {
+      candidateFacesByUuid[uuid] = data;
+      return data;
+    })
+    .catch((err) => {
+      console.warn('Failed to load candidate faces', uuid, err);
+      candidateFacesByUuid[uuid] = null;
+      return null;
+    })
+    .finally(() => {
+      delete candidateFacesPromiseByUuid[uuid];
+    });
+  return candidateFacesPromiseByUuid[uuid];
+}
+
+function renderCandidateFacesForBuilding(bldg) {
+  if (!bldg?.uuid) return;
+  const prefix = `${bldg.uuid}::candidate-face::`;
+  for (const uid of Array.from(elementMeshByUid.keys())) {
+    if (typeof uid === 'string' && uid.startsWith(prefix)) {
+      elementMeshByUid.delete(uid);
+    }
+  }
+  disposeGroup(groups.candidateFaces);
+  const payload = candidateFacesByUuid[bldg.uuid];
+  if (!payload) return;
+  renderCandidateFaces({
+    candidatesData: payload,
+    groups,
+    createPolygonMesh,
+    createEdgeLoop,
+    attachLocator,
+    buildingUuid: bldg.uuid,
+  });
+}
+
+function maybeLoadCandidateFacesForCurrentBuilding() {
+  const bldg = DATA[currentBuilding];
+  if (!bldg?.uuid) return;
+  if (!document.getElementById('show-candidate-faces')?.checked) return;
+  ensureCandidateFaces(bldg.uuid).then(() => {
+    if (!DATA[currentBuilding] || DATA[currentBuilding].uuid !== bldg.uuid) return;
+    renderCandidateFacesForBuilding(bldg);
+    renderLegend();
+  });
+}
+
+function ensureReconstruction(uuid) {
+  if (reconstructionByUuid[uuid] !== undefined) {
+    return Promise.resolve(reconstructionByUuid[uuid]);
+  }
+  if (reconstructionPromiseByUuid[uuid]) return reconstructionPromiseByUuid[uuid];
+  reconstructionPromiseByUuid[uuid] = fetch(
+    `reconstruction?uuid=${encodeURIComponent(uuid)}`,
+    { cache: 'no-store' },
+  )
+    .then((resp) => {
+      if (resp.status === 404) return null;
+      if (!resp.ok) throw new Error(`reconstruction fetch failed: ${resp.status}`);
+      return resp.json();
+    })
+    .then((data) => {
+      reconstructionByUuid[uuid] = data;
+      return data;
+    })
+    .catch((err) => {
+      console.warn('Failed to load reconstruction', uuid, err);
+      reconstructionByUuid[uuid] = null;
+      return null;
+    })
+    .finally(() => {
+      delete reconstructionPromiseByUuid[uuid];
+    });
+  return reconstructionPromiseByUuid[uuid];
+}
+
+function renderReconstructionForBuilding(bldg) {
+  if (!bldg?.uuid) return;
+  const prefix = `${bldg.uuid}::reconstruction-face::`;
+  for (const uid of Array.from(elementMeshByUid.keys())) {
+    if (typeof uid === 'string' && uid.startsWith(prefix)) {
+      elementMeshByUid.delete(uid);
+    }
+  }
+  disposeGroup(groups.reconstruction);
+  const payload = reconstructionByUuid[bldg.uuid];
+  if (!payload) return;
+  renderReconstruction({
+    reconstructionData: payload,
+    groups,
+    createPolygonMesh,
+    createEdgeLoop,
+    attachLocator,
+    buildingUuid: bldg.uuid,
+  });
+}
+
+function maybeLoadReconstructionForCurrentBuilding() {
+  const bldg = DATA[currentBuilding];
+  if (!bldg?.uuid) return;
+  if (!document.getElementById('show-reconstruction')?.checked) return;
+  ensureReconstruction(bldg.uuid).then(() => {
+    if (!DATA[currentBuilding] || DATA[currentBuilding].uuid !== bldg.uuid) return;
+    renderReconstructionForBuilding(bldg);
+    renderLegend();
+  });
+}
+
+function ensureRidgeEaveScores(uuid) {
+  if (ridgeEaveScoresByUuid[uuid] !== undefined) {
+    return Promise.resolve(ridgeEaveScoresByUuid[uuid]);
+  }
+  if (ridgeEaveScoresPromiseByUuid[uuid]) return ridgeEaveScoresPromiseByUuid[uuid];
+  ridgeEaveScoresPromiseByUuid[uuid] = fetch(
+    `ridge-eave-scores?uuid=${encodeURIComponent(uuid)}`,
+    { cache: 'no-store' },
+  )
+    .then((resp) => {
+      if (resp.status === 404) return null;
+      if (!resp.ok) throw new Error(`ridge-eave-scores fetch failed: ${resp.status}`);
+      return resp.json();
+    })
+    .then((data) => {
+      ridgeEaveScoresByUuid[uuid] = data;
+      return data;
+    })
+    .catch((err) => {
+      console.warn('Failed to load ridge/eave scores', uuid, err);
+      ridgeEaveScoresByUuid[uuid] = null;
+      return null;
+    })
+    .finally(() => {
+      delete ridgeEaveScoresPromiseByUuid[uuid];
+    });
+  return ridgeEaveScoresPromiseByUuid[uuid];
+}
+
+function renderRidgeEaveForBuilding(bldg) {
+  if (!bldg?.uuid) return;
+  const prefix = `${bldg.uuid}::ridge-eave-candidate::`;
+  for (const uid of Array.from(elementMeshByUid.keys())) {
+    if (typeof uid === 'string' && uid.startsWith(prefix)) {
+      elementMeshByUid.delete(uid);
+    }
+  }
+  disposeGroup(groups.ridgeEave);
+  const scoresPayload = ridgeEaveScoresByUuid[bldg.uuid];
+  const candsPayload = candidateFacesByUuid[bldg.uuid];
+  if (!scoresPayload || !candsPayload) return;
+  renderRidgeEaveScoring({
+    scoresData: scoresPayload,
+    candidatesData: candsPayload,
+    groups,
+    createPolygonMesh,
+    createEdgeLoop,
+    createLine,
+    attachLocator,
+    buildingUuid: bldg.uuid,
+  });
+}
+
+function maybeLoadRidgeEaveForCurrentBuilding() {
+  const bldg = DATA[currentBuilding];
+  if (!bldg?.uuid) return;
+  if (!document.getElementById('show-ridge-eave')?.checked) return;
+  Promise.all([
+    ensureCandidateFaces(bldg.uuid),
+    ensureRidgeEaveScores(bldg.uuid),
+  ]).then(() => {
+    if (!DATA[currentBuilding] || DATA[currentBuilding].uuid !== bldg.uuid) return;
+    renderRidgeEaveForBuilding(bldg);
+    renderLegend();
+  });
+}
+
+function ensureOntologyFullModel(uuid) {
+  if (fullModelPayloadByUuid[uuid]) return Promise.resolve(fullModelPayloadByUuid[uuid]);
+  if (fullModelPayloadPromiseByUuid[uuid]) return fullModelPayloadPromiseByUuid[uuid];
+  fullModelPayloadPromiseByUuid[uuid] = fetch(
+    `ontology-artifacts?uuid=${encodeURIComponent(uuid)}&view=full-model`,
+    { cache: 'no-store' },
+  )
+    .then((resp) => {
+      if (!resp.ok) throw new Error(`Full model payload fetch failed: ${resp.status}`);
+      return resp.json();
+    })
+    .then((data) => {
+      fullModelPayloadByUuid[uuid] = data;
+      return data;
+    })
+    .catch((err) => {
+      console.warn('Failed to load full-model payload', uuid, err);
+      return null;
+    })
+    .finally(() => {
+      delete fullModelPayloadPromiseByUuid[uuid];
+      updateOntologyStatusInfo();
+    });
+  return fullModelPayloadPromiseByUuid[uuid];
+}
+
 function ensureOntologyAllParts(uuid, summary = null) {
   return Promise.resolve(summary || ensureOntologySummary(uuid)).then((resolvedSummary) => {
     if (!resolvedSummary) return [];
@@ -855,7 +2337,7 @@ function maybeLoadOntologyForCurrentBuilding() {
     renderOntologyContinuationForBuilding(bldg);
     renderLegend();
     if (showFullModel) {
-      ensureOntologyAllParts(bldg.uuid, summary).then(() => {
+      ensureOntologyFullModel(bldg.uuid).then(() => {
         if (!DATA[currentBuilding] || DATA[currentBuilding].uuid !== bldg.uuid) return;
         renderFullModelOntologyForBuilding(bldg);
         renderLegend();
@@ -1047,7 +2529,7 @@ function getOrthoMap() {
 function loadBuilding(index, { resetPipeline = true } = {}) {
   currentBuilding = index;
   elementMeshByUid.clear();
-  [groups.merged, groups.computed, groups.doors, groups.windows, groups.floors, groups.gaps, groups.crossStory, groups.extensions, groups.overlaps, groups.wallClips, groups.extGaps, groups.ceilings, groups.thermalCeilings, groups.roofClusters, groups.fullModelHeuristicRoof, groups.fullModelOntology, groups.ontologySemantics, groups.ontologyContinuation, groups.ontologyCells, groups.fullModel, groups.selection].forEach(disposeGroup);
+  [groups.merged, groups.computed, groups.doors, groups.windows, groups.floors, groups.gaps, groups.crossStory, groups.extensions, groups.overlaps, groups.wallClips, groups.extGaps, groups.ceilings, groups.rawCeilings, groups.rawCeilingsRoles, groups.rawCeilingsReconstructions, groups.thermalCeilings, groups.roofClusters, groups.fullModelHeuristicRoof, groups.fullModelOntology, groups.ontologySemantics, groups.ontologyContinuation, groups.ontologyCells, groups.fullModel, groups.v3Model, groups.v3Proposals, groups.gableExtension, groups.selection].forEach(disposeGroup);
   roofClusterData = [];
 
   const bldg = DATA[index];
@@ -1220,6 +2702,27 @@ function loadBuilding(index, { resetPipeline = true } = {}) {
       }
       groups.floors.add(createEdgeLoop(room.floor_polygon, floorColor));
     }
+
+    const rawCeilingPlanes = room.raw_ceiling_planes || [];
+    rawCeilingPlanes.forEach((plane, planeIdx) => {
+      const corners = plane && plane.corners;
+      if (!corners || corners.length < 3) return;
+      const rawCeilingMesh = createPolygonMesh(corners, RAW_CEILING_COLOR, 0.4);
+      if (rawCeilingMesh) {
+        attachLocator(rawCeilingMesh, {
+          buildingUuid: bldg.uuid,
+          kind: "ceiling-raw",
+          id: `${story}:${ri}:${planeIdx}`,
+          roomId: `${story}:${ri}`,
+          story,
+          source: room.raw_ceiling_source || "scan",
+          corners,
+          lineage: [],
+        });
+        groups.rawCeilings.add(rawCeilingMesh);
+      }
+      groups.rawCeilings.add(createEdgeLoop(corners, RAW_CEILING_EDGE));
+    });
 
     // Floor overlap regions (clipped area visualization)
     if (room.floor_overlap_region && room.floor_overlap_region.length >= 3) {
@@ -1695,6 +3198,11 @@ function loadBuilding(index, { resetPipeline = true } = {}) {
     }
 
   }
+  // Index overhead oblique ceiling planes per (story, roomIndex). Used to
+  // clip V1 walls + stitches down to the roof pipeline's sloped ceiling so
+  // walls don't poke above a slanted roof in the full-model view.
+  const obliqueCeilingIndex = buildObliqueCeilingPlaneIndex(pyResult);
+
   // a) Computed walls + extension strips
   bldg.rooms.forEach((room, ri) => {
     const story = room.story || 0;
@@ -1704,20 +3212,23 @@ function loadBuilding(index, { resetPipeline = true } = {}) {
     const openingsForCutout = [
       ...(room.windows || []).map(w => ({ corners: w.corners })),
     ];
+    const roomObliquePlanes = obliqueCeilingIndex.get(`${story}:${ri}`) || [];
     for (const w of room.walls_computed) {
+      const clippedCorners = clipCornersToObliqueCeilings(w.corners, roomObliquePlanes);
       const loc = {
         buildingUuid: bldg.uuid, kind: 'wall-computed',
-        id: `${w.id || 'wall'}:${story}:${ri}`, roomId, story, corners: w.corners,
+        id: `${w.id || 'wall'}:${story}:${ri}`, roomId, story, corners: clippedCorners,
       };
-      const holes = collectWallCutoutHoles(w.corners, openingsForCutout);
-      addFullMesh(w.corners, 'structure', holes, loc);
+      const holes = collectWallCutoutHoles(clippedCorners, openingsForCutout);
+      addFullMesh(clippedCorners, 'structure', holes, loc);
       // Extension strips as continuation (same color = no seam)
       if (w.extension_strip && w.extension_strip.length > 0) {
         const strips = Array.isArray(w.extension_strip[0]?.[0]) ? w.extension_strip : [w.extension_strip];
         for (const quad of strips) {
-          addFullMesh(quad, 'structure', [], {
+          const clippedQuad = clipCornersToObliqueCeilings(quad, roomObliquePlanes);
+          addFullMesh(clippedQuad, 'structure', [], {
             buildingUuid: bldg.uuid, kind: 'wall-extension',
-            id: `${w.id || 'wall'}:${story}:${ri}`, roomId, story, corners: quad,
+            id: `${w.id || 'wall'}:${story}:${ri}`, roomId, story, corners: clippedQuad,
           });
         }
       }
@@ -1751,13 +3262,29 @@ function loadBuilding(index, { resetPipeline = true } = {}) {
   // d) Stitch walls
   for (let si = 0; si < (bldg.stitch_walls || []).length; si++) {
     const sw = bldg.stitch_walls[si];
-    addFullMesh(sw.corners, 'structure', [], {
-      buildingUuid: bldg.uuid, kind: 'wall-stitch', id: String(sw.id || `sw:${si}`), corners: sw.corners,
+    // Collect the overhead oblique planes for every room this stitch touches;
+    // stitches span two rooms, so a slope in either one needs to clip it.
+    const stitchStory = sw.story ?? 0;
+    const stitchRooms = Array.isArray(sw.room_indices) && sw.room_indices.length
+      ? sw.room_indices
+      : (sw.room_index != null ? [sw.room_index] : []);
+    const stitchPlanes = [];
+    for (const ri of stitchRooms) {
+      const planes = obliqueCeilingIndex.get(`${stitchStory}:${ri}`);
+      if (planes && planes.length) stitchPlanes.push(...planes);
+    }
+    const stitchCorners = clipCornersToObliqueCeilings(sw.corners, stitchPlanes);
+    addFullMesh(stitchCorners, 'structure', [], {
+      buildingUuid: bldg.uuid, kind: 'wall-stitch', id: String(sw.id || `sw:${si}`), corners: stitchCorners,
     });
   }
-  // d2) Dormer cheeks and headers — added individually (not merged) so locators work
-  for (let di = 0; di < (bldg.dormers || []).length; di++) {
-    const d = bldg.dormers[di];
+  // d2) Dormer cheeks and headers — added individually (not merged) so locators work.
+  // Dormer + oblique-roof geometry is produced by the python roof pipeline and
+  // delivered via pyRoofByUuid; buildings_3d.json does not carry these fields.
+  const fullModelRoofSource = (bldg?.dormers || bldg?.roof_surfaces) ? bldg : (pyResult || {});
+  const dormerList = Array.isArray(fullModelRoofSource.dormers) ? fullModelRoofSource.dormers : [];
+  for (let di = 0; di < dormerList.length; di++) {
+    const d = dormerList[di];
     for (let ci = 0; ci < (d.cheeks || []).length; ci++) {
       const cheek = d.cheeks[ci];
       if (!cheek?.corners || cheek.corners.length < 3 || cheek.source === 'existing') continue;
@@ -1791,7 +3318,9 @@ function loadBuilding(index, { resetPipeline = true } = {}) {
     }
   }
   // d3) Oblique roof surfaces (with dormer cutout holes)
-  const obliqueRoofSurfaces = bldg?.roof_surfaces?.oblique || [];
+  const obliqueRoofSurfaces = Array.isArray(fullModelRoofSource?.roof_surfaces?.oblique)
+    ? fullModelRoofSource.roof_surfaces.oblique
+    : [];
   for (let ri = 0; ri < obliqueRoofSurfaces.length; ri++) {
     const s = obliqueRoofSurfaces[ri];
     if (!s.corners || s.corners.length < 3) continue;
@@ -1843,24 +3372,34 @@ function loadBuilding(index, { resetPipeline = true } = {}) {
   const srcCounts = {};
   bldg.rooms.forEach(r => r.walls_computed.forEach(w => { srcCounts[w.source] = (srcCounts[w.source] || 0) + 1; }));
   const srcInfo = Object.entries(srcCounts).map(([k, v]) => `${v} ${k}`).join(', ');
+  const uuidChip = `<span class="uuid-chip" title="Click to copy UUID" data-copy-uuid="${bldg.uuid}" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#1a1a2e;color:#cde;padding:1px 6px;border-radius:3px;border:1px solid #333;cursor:pointer;user-select:all;">${bldg.uuid}</span>`;
   buildingInfoBaseHtml =
-    `${addr} &middot; ${bldg.rooms.length} rooms &middot; ` +
+    `${uuidChip} &middot; ${addr} &middot; ${bldg.rooms.length} rooms &middot; ` +
     `${bldg.stories_found} stories &middot; ${computedCount} computed / ${mergedCount} merged walls${openingsInfo}${gapInfo}${extInfo}${overlapInfo}${wallClipInfo}${extGapInfo}` +
     `<br><span style="color:#555">Sources: ${srcInfo}</span>` +
     `<br><span style="color:#888">Right-click any element to copy its shareable ID</span>`;
-  document.getElementById('building-info').innerHTML = buildingInfoBaseHtml;
+  const infoEl = document.getElementById('building-info');
+  infoEl.innerHTML = buildingInfoBaseHtml;
+  const chip = infoEl.querySelector('.uuid-chip');
+  if (chip && !chip.dataset.copyBound) {
+    chip.dataset.copyBound = '1';
+    chip.addEventListener('click', async () => {
+      const ok = await copyText(chip.dataset.copyUuid || '');
+      setMapStatus(ok ? `Copied UUID: ${chip.dataset.copyUuid}` : `UUID: ${chip.dataset.copyUuid}`);
+    });
+  }
   updateOntologyStatusInfo();
 
-  // Camera
+  // Camera — honor the `#cam=<preset>` URL param when present so the
+  // screenshot harness can capture deterministic views. Defaults to the
+  // original iso view.
   let maxDist = 5;
   for (const p of allCorners) {
     const d = Math.hypot(p[0]-cx, p[1]-cy, p[2]-cz);
     if (d > maxDist) maxDist = d;
   }
   const cd = maxDist * 1.8;
-  camera.position.set(cx + cd*0.7, cy + cd*0.9, cz + cd*0.7);
-  controls.target.set(cx, cy, cz);
-  controls.update();
+  applyCameraPreset(getCameraPresetFromHash() || 'iso', cx, cy, cz, cd);
 
   // Highlight sidebar (only scroll for keyboard nav, not clicks)
   document.querySelectorAll('.bldg-item').forEach(el => {
@@ -1874,6 +3413,64 @@ function loadBuilding(index, { resetPipeline = true } = {}) {
   } else {
     applyPipelineStep(pipelineStepIndex);
   }
+
+  // `#layers=<comma-list>` overrides all layer toggles AFTER the pipeline
+  // step (which normally sets them) — lets scripted loads capture an
+  // arbitrary layer combination regardless of which pipeline step a user
+  // previously parked at.
+  const layerPreset = getLayerPresetFromHash();
+  if (Array.isArray(layerPreset)) applyLayerPreset(layerPreset);
+
+  // Stamp a render-complete marker so the screenshot harness can wait for
+  // rendering to settle before snapping. (`wait_for` in the
+  // chrome-devtools MCP polls DOM.)
+  stampRenderComplete();
+}
+
+function applyCameraPreset(preset, cx, cy, cz, cd) {
+  switch (preset) {
+    case 'overhead':
+      // Top-down view, roughly orthographic-feeling — useful for
+      // footprint comparison against the scan footprint.
+      camera.position.set(cx, cy + cd * 1.6, cz + 0.01);
+      break;
+    case 'south':
+      camera.position.set(cx, cy + cd * 0.4, cz + cd * 1.2);
+      break;
+    case 'east':
+      camera.position.set(cx + cd * 1.2, cy + cd * 0.4, cz);
+      break;
+    case 'iso':
+    default:
+      camera.position.set(cx + cd * 0.7, cy + cd * 0.9, cz + cd * 0.7);
+  }
+  controls.target.set(cx, cy, cz);
+  controls.update();
+}
+
+function applyLayerPreset(layers) {
+  const wanted = new Set(layers);
+  for (const key of LAYER_KEYS) {
+    const visible = wanted.has(key);
+    setLayerVisibility(key, visible);
+  }
+}
+
+function stampRenderComplete() {
+  let marker = document.getElementById('render-complete');
+  if (!marker) {
+    marker = document.createElement('div');
+    marker.id = 'render-complete';
+    marker.style.display = 'none';
+    document.body.appendChild(marker);
+  }
+  // Two rAF frames guarantees the last frame committed to the canvas has
+  // flushed — then we flip the marker's data attribute the harness polls.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      marker.dataset.stamp = String(Date.now());
+    });
+  });
 }
 
 bindUIEventHandlers({
@@ -1887,6 +3484,20 @@ bindUIEventHandlers({
   applyPipelineStep,
   setLayerVisibility,
   onLayerVisibilityChanged: (layer, visible) => {
+    if (layer === 'fullModel' && visible) {
+      // Full model view is the unified final render. Hide every other layer
+      // so debug / per-story / per-cluster / diagnostic overlays don't tint
+      // the same surfaces with conflicting colors.
+      for (const other of LAYER_KEYS) {
+        if (other === 'fullModel') continue;
+        if (groups[other]?.visible) setLayerVisibility(other, false);
+      }
+      const diffCtl = document.getElementById('show-full-model-diff');
+      if (diffCtl && diffCtl.checked) {
+        diffCtl.checked = false;
+        diffCtl.dispatchEvent(new Event('change'));
+      }
+    }
     if (layer === 'ontologySemantics' || layer === 'ontologyContinuation' || layer === 'ontologyCells' || layer === 'fullModel') {
       const bldg = DATA[currentBuilding];
       if (bldg && layer === 'ontologyCells' && !visible) {
@@ -1927,6 +3538,13 @@ bindUIEventHandlers({
   getAnchorModeEnabled: () => anchorModeEnabled,
 });
 
+document.getElementById('merge-v3-roof-proposal-planes')?.addEventListener('change', () => {
+  const bldg = DATA[currentBuilding];
+  if (!bldg) return;
+  renderV3ForBuilding(bldg);
+  renderLegend();
+});
+
 document.getElementById('show-full-model-diff')?.addEventListener('change', (event) => {
   fullModelDiffModeEnabled = !!event.target?.checked;
   const bldg = DATA[currentBuilding];
@@ -1947,7 +3565,7 @@ canvas.addEventListener("contextmenu", async (event) => {
   raycaster.setFromCamera(pointer, camera);
 
   const intersections = raycaster.intersectObjects(getVisiblePickRoots(), true);
-  const hit = intersections.find((it) => it.object?.userData?.elementUid);
+  const hit = pickElementIntersection(intersections);
   if (!hit) {
     setMapStatus("Right-click a rendered element to copy a shareable ID");
     hideLineagePanel();
@@ -1955,18 +3573,25 @@ canvas.addEventListener("contextmenu", async (event) => {
   }
 
   const uid = hit.object.userData.elementUid;
+  const locator = hit.object.userData?.elementLocator || null;
   const ok = await copyText(uid);
+
+  let suffix = '';
+  if (locator && (locator.kind === 'ridge-eave-candidate' || locator.kind === 'candidate-face')) {
+    const az = locator.azimuthDeg != null ? `az=${Number(locator.azimuthDeg).toFixed(0)}°` : '';
+    const inc = locator.inclinationDeg != null ? `inc=${Number(locator.inclinationDeg).toFixed(0)}°` : '';
+    const score = locator.bestScore != null ? `score=${Number(locator.bestScore).toFixed(2)}` : '';
+    const pg = locator.planeGroupId ? `pg=${String(locator.planeGroupId).slice(-12)}` : '';
+    suffix = ` · ${[az, inc, score, pg].filter(Boolean).join(' ')}`;
+  }
+
   if (!ok) {
-    setMapStatus(`Element ID: ${uid}`);
+    setMapStatus(`Element ID: ${uid}${suffix}`);
     return;
   }
 
   const selected = jumpToElementUid(uid, { focus: false, updateHash: true });
-  if (selected) {
-    setMapStatus(`Copied element ID: ${uid}`);
-  } else {
-    setMapStatus(`Copied: ${uid}`);
-  }
+  setMapStatus(`Copied: ${uid}${suffix}`);
 });
 
 canvas.addEventListener("click", (event) => {
@@ -1975,12 +3600,40 @@ canvas.addEventListener("click", (event) => {
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
+
+  if (splitModeState) {
+    const hits = raycaster.intersectObject(groups.v3Proposals, true);
+    const hit = hits.find((it) => it.object?.userData?.elementUid === splitModeState.proposalId);
+    if (!hit) {
+      const statusEl = document.getElementById('proposal-status');
+      if (statusEl) statusEl.textContent = 'Click inside the selected proposal polygon.';
+      return;
+    }
+    splitModeState.points.push([hit.point.x, hit.point.z]);
+    if (splitModeState.points.length === 1) {
+      const statusEl = document.getElementById('proposal-status');
+      if (statusEl) statusEl.textContent = 'One point captured. Click second point.';
+      return;
+    }
+    if (splitModeState.points.length >= 2) {
+      const [p1, p2] = splitModeState.points;
+      submitProposalSplit(p1, p2);
+    }
+    return;
+  }
+
   const intersections = raycaster.intersectObjects(getVisiblePickRoots(), true);
-  const hit = intersections.find((it) => it.object?.userData?.elementUid);
+  const hit = pickElementIntersection(intersections);
   if (!hit) return;
   const uid = hit.object.userData.elementUid;
   const locator = hit.object.userData?.elementLocator || null;
-  jumpToElementUid(uid, { focus: false, updateHash: true });
+  // Shift-click multi-select only for label-eligible kinds; other kinds
+  // (walls, floors, …) keep single-select behavior.
+  const parsedClicked = parseElementUid(uid);
+  const additive = !!event.shiftKey
+    && parsedClicked
+    && (parsedClicked.kind === 'v3-roof-proposal' || parsedClicked.kind === 'v3-merged-roof-segment');
+  jumpToElementUid(uid, { focus: false, updateHash: !additive, additive });
   const partId = ontologyPartIdFromLocator(locator);
   if (partId) {
     const uuid = locator?.buildingUuid || DATA[currentBuilding]?.uuid;
@@ -2011,27 +3664,431 @@ function animate() {
 renderPipelineStatus();
 renderLegend();
 
-fetch(`roof_algorithms_py_results.json?v=${Date.now()}`, { cache: 'no-store' })
-  .then(r => (r.ok ? r.json() : {}))
-  .then(data => {
-    pyRoofByUuid = (data && typeof data === 'object') ? data : {};
-    if (DATA.length > 0) {
-      loadBuilding(currentBuilding, { resetPipeline: false });
+async function fetchJsonWithLastModified(url) {
+  const response = await fetch(url, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch ${url}: ${response.status}`);
+  }
+  const lastModifiedHeader = response.headers.get('last-modified');
+  const lastModifiedMs = lastModifiedHeader ? Date.parse(lastModifiedHeader) : NaN;
+  return {
+    data: await response.json(),
+    lastModifiedMs: Number.isFinite(lastModifiedMs) ? lastModifiedMs : null,
+  };
+}
+
+function ensureRawCeilingPrototype() {
+  if (rawCeilingPrototype !== null) return Promise.resolve(rawCeilingPrototype);
+  if (rawCeilingPrototypePromise) return rawCeilingPrototypePromise;
+  rawCeilingPrototypePromise = fetch('/raw-ceiling-prototype')
+    .then(r => (r.ok ? r.json() : null))
+    .then(data => {
+      rawCeilingPrototype = data && typeof data === 'object'
+        ? data
+        : { planes: {}, rooms: {}, reconstructions: {} };
+      return rawCeilingPrototype;
+    })
+    .catch(() => {
+      rawCeilingPrototype = { planes: {}, rooms: {}, reconstructions: {} };
+      return rawCeilingPrototype;
+    });
+  return rawCeilingPrototypePromise;
+}
+
+function renderRawCeilingPrototypeForBuilding(bldg) {
+  if (!bldg?.uuid || !rawCeilingPrototype) return;
+
+  const rolesPrefix = `${bldg.uuid}::ceiling-raw-role::`;
+  const reconPrefixDormer = `${bldg.uuid}::ceiling-reconstruction-dormer::`;
+  const reconPrefixWing = `${bldg.uuid}::ceiling-reconstruction-wing::`;
+  for (const uid of Array.from(elementMeshByUid.keys())) {
+    if (typeof uid === 'string' && (
+      uid.startsWith(rolesPrefix) ||
+      uid.startsWith(reconPrefixDormer) ||
+      uid.startsWith(reconPrefixWing)
+    )) {
+      elementMeshByUid.delete(uid);
     }
-  })
-  .catch(() => {
-    pyRoofByUuid = {};
+  }
+  disposeGroup(groups.rawCeilingsRoles);
+  disposeGroup(groups.rawCeilingsReconstructions);
+
+  const planesMap = rawCeilingPrototype.planes || {};
+  bldg.rooms.forEach((room, ri) => {
+    const story = room.story || 0;
+    const planes = room.raw_ceiling_planes || [];
+    planes.forEach((plane, planeIdx) => {
+      const corners = plane && plane.corners;
+      if (!corners || corners.length < 3) return;
+      const elementId = `${bldg.uuid}::ceiling-raw::${story}:${ri}:${planeIdx}`;
+      const entry = planesMap[elementId];
+      const role = entry?.role || 'unclassified';
+      const color = RAW_CEILING_ROLE_COLORS[role] ?? RAW_CEILING_ROLE_COLORS.unclassified;
+      const mesh = createPolygonMesh(corners, color, 0.55);
+      if (mesh) {
+        mesh.renderOrder = 56;
+        attachLocator(mesh, {
+          buildingUuid: bldg.uuid,
+          kind: 'ceiling-raw',
+          id: `${story}:${ri}:${planeIdx}`,
+          roomId: `${story}:${ri}`,
+          story,
+          source: entry?.archetype || room.raw_ceiling_source || 'scan',
+          corners,
+          lineage: [],
+        });
+        groups.rawCeilingsRoles.add(mesh);
+      }
+      groups.rawCeilingsRoles.add(createEdgeLoop(corners, color, 0.85));
+    });
   });
 
-fetch(`buildings_3d.json?v=${Date.now()}`, { cache: 'no-store' })
-  .then(r => r.json())
-  .then(data => {
+  const reconBucket = (rawCeilingPrototype.reconstructions || {})[bldg.uuid] || {};
+  const dormerPieces = Array.isArray(reconBucket.dormer) ? reconBucket.dormer : [];
+  const wingPieces = Array.isArray(reconBucket.wing) ? reconBucket.wing : [];
+  const pieceIdFromElementId = (elementId, story, roomIndex, spi) => {
+    if (typeof elementId === 'string') {
+      const idx = elementId.lastIndexOf('::');
+      if (idx >= 0) return elementId.slice(idx + 2);
+    }
+    return `${story}:${roomIndex}:${spi ?? 0}`;
+  };
+  for (const piece of dormerPieces) {
+    const corners = piece?.corners;
+    if (!Array.isArray(corners) || corners.length < 3) continue;
+    const color = CEILING_RECON_DORMER_COLORS[piece.piece_role] ?? CEILING_RECON_DORMER_COLORS.slope;
+    const mesh = createPolygonMesh(corners, color, 0.7);
+    if (mesh) {
+      mesh.renderOrder = 60;
+      attachLocator(mesh, {
+        buildingUuid: bldg.uuid,
+        kind: 'ceiling-reconstruction-dormer',
+        id: pieceIdFromElementId(piece.element_id, piece.story, piece.room_index, piece.source_plane_index),
+        roomId: `${piece.story}:${piece.room_index}`,
+        story: piece.story,
+        source: piece.piece_role || 'dormer',
+        corners,
+        lineage: [],
+      });
+      groups.rawCeilingsReconstructions.add(mesh);
+    }
+    groups.rawCeilingsReconstructions.add(createEdgeLoop(corners, color, 0.95));
+  }
+  for (const piece of wingPieces) {
+    const corners = piece?.corners;
+    if (!Array.isArray(corners) || corners.length < 3) continue;
+    const color = CEILING_RECON_WING_COLORS[piece.piece_role] ?? CEILING_RECON_WING_COLORS.slope;
+    const mesh = createPolygonMesh(corners, color, 0.7);
+    if (mesh) {
+      mesh.renderOrder = 60;
+      attachLocator(mesh, {
+        buildingUuid: bldg.uuid,
+        kind: 'ceiling-reconstruction-wing',
+        id: pieceIdFromElementId(piece.element_id, piece.story, piece.room_index, piece.source_plane_index),
+        roomId: `${piece.story}:${piece.room_index}`,
+        story: piece.story,
+        source: piece.piece_role || 'wing',
+        corners,
+        lineage: [],
+      });
+      groups.rawCeilingsReconstructions.add(mesh);
+    }
+    groups.rawCeilingsReconstructions.add(createEdgeLoop(corners, color, 0.95));
+  }
+}
+
+function maybeLoadRawCeilingPrototypeForCurrentBuilding() {
+  const bldg = DATA?.[currentBuilding];
+  if (!bldg?.uuid) return;
+  const wantRoles = !!document.getElementById('show-raw-ceilings-roles')?.checked;
+  const wantRecon = !!document.getElementById('show-raw-ceilings-reconstructions')?.checked;
+  if (!wantRoles && !wantRecon) return;
+  ensureRawCeilingPrototype().then(() => {
+    if (!DATA[currentBuilding] || DATA[currentBuilding].uuid !== bldg.uuid) return;
+    renderRawCeilingPrototypeForBuilding(bldg);
+  });
+}
+
+function ensureComputedOverextend() {
+  if (computedOverextend !== null) return Promise.resolve(computedOverextend);
+  if (computedOverextendPromise) return computedOverextendPromise;
+  computedOverextendPromise = fetch('/computed-overextend')
+    .then(r => (r.ok ? r.json() : null))
+    .then(data => {
+      computedOverextend = data && typeof data === 'object' ? data : { buildings: {} };
+      return computedOverextend;
+    })
+    .catch(() => {
+      computedOverextend = { buildings: {} };
+      return computedOverextend;
+    });
+  return computedOverextendPromise;
+}
+
+function overextendColor(fraction) {
+  if (fraction <= 0.1) return COMPUTED_OVEREXTEND_COLORS.low;
+  if (fraction <= 0.4) return COMPUTED_OVEREXTEND_COLORS.mid;
+  return COMPUTED_OVEREXTEND_COLORS.high;
+}
+
+function renderComputedOverextendForBuilding(bldg) {
+  if (!bldg?.uuid || !computedOverextend) return;
+  const prefix = `${bldg.uuid}::roof-overextend::`;
+  for (const uid of Array.from(elementMeshByUid.keys())) {
+    if (typeof uid === 'string' && uid.startsWith(prefix)) {
+      elementMeshByUid.delete(uid);
+    }
+  }
+  disposeGroup(groups.computedOverextend);
+
+  const pieces = (computedOverextend.buildings || {})[bldg.uuid] || [];
+  for (const piece of pieces) {
+    const topCorners = piece?.corners;
+    if (!Array.isArray(topCorners) || topCorners.length < 3) continue;
+    const fraction = Number(piece.overextend_fraction_xz) || 0;
+    const color = overextendColor(fraction);
+    // Top face — the overextend polygon lifted to the computed surface's plane.
+    const topMesh = createPolygonMesh(topCorners, color, 0.55);
+    if (topMesh) {
+      topMesh.renderOrder = 58;
+      attachLocator(topMesh, {
+        buildingUuid: bldg.uuid,
+        kind: 'roof-overextend',
+        id: `${piece.surface_kind}:${piece.surface_index}`,
+        roomId: null,
+        story: piece.story ?? null,
+        source: `${piece.surface_kind} overextend ${(fraction * 100).toFixed(1)}% Δy=${(piece.overextend_y_m ?? 0).toFixed(2)}m`,
+        corners: topCorners,
+        lineage: [piece.source_element_id],
+      });
+      groups.computedOverextend.add(topMesh);
+    }
+    groups.computedOverextend.add(createEdgeLoop(topCorners, color, 0.95));
+
+    // 3D drop from the computed surface down to the highest raw-ceiling corner,
+    // so the overlay visibly encloses the air volume the pipeline extrapolated
+    // beyond scan evidence. Skip when raw_y_max is missing (no overlap) or the
+    // gap is trivially small (flat roofs whose Y matches raw already).
+    const rawYMax = piece.raw_y_max;
+    const gap = Number(piece.overextend_y_m);
+    if (typeof rawYMax === 'number' && Number.isFinite(gap) && gap > 0.05) {
+      const bottomCorners = topCorners.map(c => [c[0], rawYMax, c[2]]);
+      // Side walls as explicit triangles — each side quad is non-planar (sloped
+      // top edge, horizontal bottom) so it must be split, otherwise
+      // createPolygonMesh's fit-plane step flattens the whole ring into a
+      // single bbox-sized quad.
+      const wallTris = [];
+      for (let i = 0; i < topCorners.length; i++) {
+        const j = (i + 1) % topCorners.length;
+        wallTris.push([topCorners[i], topCorners[j], bottomCorners[j]]);
+        wallTris.push([topCorners[i], bottomCorners[j], bottomCorners[i]]);
+      }
+      const walls = createTriangleMesh(wallTris, color, 0.25);
+      if (walls) {
+        walls.renderOrder = 57;
+        groups.computedOverextend.add(walls);
+      }
+      // Raw-max floor outline so the datum is visible.
+      groups.computedOverextend.add(createEdgeLoop(bottomCorners, color, 0.6));
+    }
+  }
+}
+
+function maybeLoadComputedOverextendForCurrentBuilding() {
+  const bldg = DATA?.[currentBuilding];
+  if (!bldg?.uuid) return;
+  if (!document.getElementById('show-computed-overextend')?.checked) return;
+  ensureComputedOverextend().then(() => {
+    if (!DATA[currentBuilding] || DATA[currentBuilding].uuid !== bldg.uuid) return;
+    renderComputedOverextendForBuilding(bldg);
+  });
+}
+
+function ensureRawDisagreement() {
+  if (rawDisagreement !== null) return Promise.resolve(rawDisagreement);
+  if (rawDisagreementPromise) return rawDisagreementPromise;
+  rawDisagreementPromise = fetch('/raw-disagreement')
+    .then(r => (r.ok ? r.json() : null))
+    .then(data => {
+      rawDisagreement = data && typeof data === 'object' ? data : { buildings: {} };
+      return rawDisagreement;
+    })
+    .catch(() => {
+      rawDisagreement = { buildings: {} };
+      return rawDisagreement;
+    });
+  return rawDisagreementPromise;
+}
+
+function disagreementColor(angleDeg) {
+  if (angleDeg <= 30) return RAW_DISAGREEMENT_COLORS.low;
+  if (angleDeg <= 60) return RAW_DISAGREEMENT_COLORS.mid;
+  return RAW_DISAGREEMENT_COLORS.high;
+}
+
+function renderRawDisagreementForBuilding(bldg) {
+  if (!bldg?.uuid || !rawDisagreement) return;
+  const prefix = `${bldg.uuid}::raw-disagreement::`;
+  for (const uid of Array.from(elementMeshByUid.keys())) {
+    if (typeof uid === 'string' && uid.startsWith(prefix)) {
+      elementMeshByUid.delete(uid);
+    }
+  }
+  disposeGroup(groups.rawDisagreement);
+
+  const pieces = (rawDisagreement.buildings || {})[bldg.uuid] || [];
+  for (const piece of pieces) {
+    const corners = piece?.corners;
+    if (!Array.isArray(corners) || corners.length < 3) continue;
+    const angle = Number(piece.angle_deg) || 0;
+    const color = disagreementColor(angle);
+    const mesh = createPolygonMesh(corners, color, 0.7);
+    if (mesh) {
+      mesh.renderOrder = 60;
+      attachLocator(mesh, {
+        buildingUuid: bldg.uuid,
+        kind: 'raw-disagreement',
+        id: String(piece.pair_index),
+        roomId: null,
+        story: piece.story ?? null,
+        source: `raw pair Δ=${angle.toFixed(0)}° (az ${piece.azimuth_i}°/${piece.inclination_i}° vs ${piece.azimuth_j}°/${piece.inclination_j}°) overlap ${piece.overlap_area_m2}m²`,
+        corners,
+        lineage: [piece.plane_i_element_id, piece.plane_j_element_id].filter(Boolean),
+      });
+      groups.rawDisagreement.add(mesh);
+    }
+    groups.rawDisagreement.add(createEdgeLoop(corners, color, 1.0));
+  }
+}
+
+function maybeLoadRawDisagreementForCurrentBuilding() {
+  const bldg = DATA?.[currentBuilding];
+  if (!bldg?.uuid) return;
+  if (!document.getElementById('show-raw-disagreement')?.checked) return;
+  ensureRawDisagreement().then(() => {
+    if (!DATA[currentBuilding] || DATA[currentBuilding].uuid !== bldg.uuid) return;
+    renderRawDisagreementForBuilding(bldg);
+  });
+}
+
+function ensureCeilingReplacement() {
+  if (ceilingReplacement !== null) return Promise.resolve(ceilingReplacement);
+  if (ceilingReplacementPromise) return ceilingReplacementPromise;
+  ceilingReplacementPromise = fetch('/ceiling-replacement')
+    .then(r => (r.ok ? r.json() : null))
+    .then(data => {
+      ceilingReplacement = data && typeof data === 'object' ? data : { buildings: {} };
+      return ceilingReplacement;
+    })
+    .catch(() => {
+      ceilingReplacement = { buildings: {} };
+      return ceilingReplacement;
+    });
+  return ceilingReplacementPromise;
+}
+
+function replacementColor(density) {
+  if (density <= 0.7) return CEILING_REPLACEMENT_COLORS.low;
+  if (density <= 1.5) return CEILING_REPLACEMENT_COLORS.mid;
+  return CEILING_REPLACEMENT_COLORS.high;
+}
+
+function renderCeilingReplacementForBuilding(bldg) {
+  if (!bldg?.uuid || !ceilingReplacement) return;
+  const prefix = `${bldg.uuid}::clean-ceiling::`;
+  for (const uid of Array.from(elementMeshByUid.keys())) {
+    if (typeof uid === 'string' && uid.startsWith(prefix)) {
+      elementMeshByUid.delete(uid);
+    }
+  }
+  disposeGroup(groups.ceilingReplacement);
+
+  const pieces = (ceilingReplacement.buildings || {})[bldg.uuid] || [];
+  for (const piece of pieces) {
+    const corners = piece?.corners;
+    if (!Array.isArray(corners) || corners.length < 3) continue;
+    const density = Number(piece.max_density_planes_per_m2 ?? piece.density_planes_per_m2) || 0;
+    const color = replacementColor(density);
+    const pieceRole = piece.piece_role || 'oblique';
+    const opacity = pieceRole === 'flat-cap' ? 0.58 : 0.72;
+    const mesh = createPolygonMesh(corners, color, opacity);
+    if (mesh) {
+      mesh.renderOrder = 59;
+      const elementId = String(piece.element_id || `${bldg.uuid}::clean-ceiling::${piece.story}:${piece.room_index}`);
+      const idTail = elementId.split('::').slice(2).join('::') || `${piece.story}:${piece.room_index}`;
+      const componentDensity = Number(piece.component_density_planes_per_m2) || 0;
+      const mode = piece.replacement_mode || 'single-oblique';
+      const mixedFit = Number(piece.mixed_fit_iou) || 0;
+      const gapArea = Number(piece.gap_extension_area_m2) || 0;
+      const selectionMode = String(piece.replacement_selection_mode || 'overlap-only');
+      const azDelta = Number(piece.replacement_azimuth_delta_deg);
+      const noMeshPromoted = Number(piece.promote_nomesh_computed) === 1;
+      const topologyApplied = Number(piece.topology_filter_applied) === 1;
+      const topologyAction = String(piece.topology_filter_action || '');
+      const topExposedArea = Number(piece.top_exposed_area_m2) || 0;
+      const roomArea = Number(piece.floor_area_m2) || 0;
+      let topologyNote = '';
+      if (topologyApplied && topologyAction === 'clip-to-top-exposed') {
+        topologyNote = `, topology clip ${topExposedArea.toFixed(2)}m² exposed / ${roomArea.toFixed(2)}m² room`;
+      } else if (topologyApplied && topologyAction) {
+        topologyNote = `, topology ${topologyAction.replaceAll('-', ' ')}`;
+      }
+      attachLocator(mesh, {
+        buildingUuid: bldg.uuid,
+        kind: 'clean-ceiling',
+        id: idTail,
+        roomId: null,
+        story: piece.story ?? null,
+        source: `clean ceiling (${pieceRole}, ${mode}, ${selectionMode}${noMeshPromoted ? ', noMesh computed-backed' : ''}) — ${piece.n_raw_planes} raw planes, room ${Number(piece.density_planes_per_m2 || 0).toFixed(2)}/m², local ${componentDensity.toFixed(2)}/m², fit ${mixedFit.toFixed(2)}, gap +${gapArea.toFixed(2)}m², az Δ ${Number.isFinite(azDelta) ? azDelta.toFixed(1) : '-'}°, max slant ${piece.max_incl_deg}°, room floor ${piece.floor_area_m2}m²${topologyNote}`,
+        corners,
+        lineage: piece.raw_plane_element_ids || [],
+      });
+      groups.ceilingReplacement.add(mesh);
+    }
+    groups.ceilingReplacement.add(createEdgeLoop(corners, color, 1.0));
+  }
+}
+
+function maybeLoadCeilingReplacementForCurrentBuilding() {
+  const bldg = DATA?.[currentBuilding];
+  if (!bldg?.uuid) return;
+  if (!document.getElementById('show-ceiling-replacement')?.checked) return;
+  ensureCeilingReplacement().then(() => {
+    if (!DATA[currentBuilding] || DATA[currentBuilding].uuid !== bldg.uuid) return;
+    renderCeilingReplacementForBuilding(bldg);
+  });
+}
+
+Promise.all([
+  fetchJsonWithLastModified(`buildings_3d.json?v=${Date.now()}`),
+  fetchJsonWithLastModified(`roof_algorithms_py_results.json?v=${Date.now()}`).catch(() => ({
+    data: {},
+    lastModifiedMs: null,
+  })),
+])
+  .then(([buildingPayload, roofPayload]) => {
+    const buildingsMtime = buildingPayload.lastModifiedMs;
+    const roofMtime = roofPayload.lastModifiedMs;
+    const roofFreshEnough = (
+      roofMtime == null ||
+      buildingsMtime == null ||
+      roofMtime >= buildingsMtime
+    );
+    if (!roofFreshEnough) {
+      console.warn(
+        'Ignoring stale roof_algorithms_py_results.json because it is older than buildings_3d.json',
+        { roofMtime, buildingsMtime },
+      );
+      pyRoofByUuid = {};
+    } else {
+      pyRoofByUuid = (roofPayload.data && typeof roofPayload.data === 'object') ? roofPayload.data : {};
+    }
     return fetch('/alignment-calibration')
       .then(r => (r.ok ? r.json() : {}))
       .catch(() => ({}))
       .then(calib => {
         alignmentByUuid = (calib && typeof calib === 'object') ? calib : {};
-        return data;
+        return buildingPayload.data;
       });
   })
   .then(data => {

@@ -19,6 +19,65 @@ def wall_xz_length(corners):
     return math.hypot(dx, dz)
 
 
+def _canonicalize_wall_quad(corners):
+    """Normalize a wall with arbitrary corner count/order to a 4-corner
+    quad ``[bl, br, tr, tl]`` whose bottom edge is the wall's length axis.
+
+    Walls produced by scan-cache / extension-strip code paths can have
+    5+ corners or non-canonical ordering, which breaks downstream code
+    that assumes ``corners[0..1]`` is the bottom edge (the gap-closure
+    construction in particular).
+
+    For canonical 4-corner walls already ordered ``[bl, br, tr, tl]`` the
+    return value is bit-identical to the input.
+    """
+    if len(corners) < 4:
+        return [list(c) for c in corners]
+    arr = [list(c) for c in corners]
+    ys = [c[1] for c in arr]
+    if max(ys) - min(ys) < 1e-3:
+        return arr
+    mid_y = (max(ys) + min(ys)) / 2.0
+    bot_cs = [c for c in arr if c[1] < mid_y + 0.01]
+    top_cs = [c for c in arr if c[1] > mid_y - 0.01]
+    if len(bot_cs) < 2 or len(top_cs) < 2:
+        return arr
+
+    bl, br = bot_cs[0], bot_cs[1]
+    best_d2 = -1.0
+    for i in range(len(bot_cs)):
+        for j in range(i + 1, len(bot_cs)):
+            dx = bot_cs[i][0] - bot_cs[j][0]
+            dz = bot_cs[i][2] - bot_cs[j][2]
+            d2 = dx * dx + dz * dz
+            if d2 > best_d2:
+                best_d2 = d2
+                bl, br = bot_cs[i], bot_cs[j]
+
+    # Preserve the incoming corners[0]→corners[1] xz direction so canonical
+    # walls round-trip unchanged and the pc/wc axes stay consistent.
+    ref_dx = arr[1][0] - arr[0][0]
+    ref_dz = arr[1][2] - arr[0][2]
+    if (br[0] - bl[0]) * ref_dx + (br[2] - bl[2]) * ref_dz < 0:
+        bl, br = br, bl
+
+    def _nearest(x, z, candidates):
+        best = candidates[0]
+        best_d2 = float("inf")
+        for c in candidates:
+            dx = c[0] - x
+            dz = c[2] - z
+            d2 = dx * dx + dz * dz
+            if d2 < best_d2:
+                best_d2 = d2
+                best = c
+        return best
+
+    tl = _nearest(bl[0], bl[2], top_cs)
+    tr = _nearest(br[0], br[2], top_cs)
+    return [list(bl), list(br), list(tr), list(tl)]
+
+
 def detect_exterior_gap_indicators(rooms_out):
     """Detect gaps in front of doors/openings/storages.
 
@@ -284,17 +343,19 @@ def compute_gap_closures(indicators, rooms_out, graph=None):
                     element_parent_wall[elem["id"]] = parent_id
 
     for ind in indicators:
-        wc = np.array(ind["wall_corners"])
-        if len(wc) < 4:
+        wc_raw = ind["wall_corners"]
+        if len(wc_raw) < 4:
             continue
+        wc = np.array(_canonicalize_wall_quad(wc_raw))
 
         parent_id = element_parent_wall.get(ind["element_id"])
         if parent_id and parent_id in all_walls_by_id:
-            pc = np.array(all_walls_by_id[parent_id])
+            pc_raw = all_walls_by_id[parent_id]
         else:
-            pc = np.array(ind["element_corners"])
-        if len(pc) < 4:
+            pc_raw = ind["element_corners"]
+        if len(pc_raw) < 4:
             continue
+        pc = np.array(_canonicalize_wall_quad(pc_raw))
 
         wall_dir = wc[1] - wc[0]
         wall_dir_xz = np.array([wall_dir[0], 0.0, wall_dir[2]])

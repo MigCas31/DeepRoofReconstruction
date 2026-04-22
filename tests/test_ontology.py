@@ -16,7 +16,9 @@ from reconcile.extract3d.gaps import (
 from reconcile.extract3d.overlaps import clip_floor_overlaps, floor_polygon_to_shapely
 from reconcile.extract3d.stitch import recommend_stitch_actions
 from reconcile.roof_algorithms_py.math_utils import plane_normal, plane_y_at
-from reconcile.roof_algorithms_py.occupied_room_cell_complex import build_occupied_room_cell_complex
+from reconcile.roof_algorithms_py.occupied_room_cell_complex import (
+    build_occupied_room_cell_complex,
+)
 from reconcile.roof_algorithms_py.roof_cell_complex import (
     _surface_y_at as cell_complex_surface_y_at,
 )

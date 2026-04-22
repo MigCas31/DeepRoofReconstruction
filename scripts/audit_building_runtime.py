@@ -11,7 +11,6 @@ from reconcile.extract3d.builder import extract_building
 from reconcile.roof_algorithms_py import run_roof_algorithms
 from reconcile_v2.graph_builder import build_topology_graph
 
-
 ROOT = Path(__file__).resolve().parents[1]
 PIPELINE_ROOT = ROOT / "pipeline-outputs"
 SCAN_CACHE_ROOT = ROOT / ".scan-cache"

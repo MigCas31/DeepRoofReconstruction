@@ -8,9 +8,16 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
-from shapely.geometry import MultiPolygon, Point, Polygon
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 from shapely.ops import unary_union
 from shapely.validation import make_valid
+
+from reconcile.extract3d.builder import _is_split_level
+from reconcile.extract3d.ceilings import find_best_slab_above
+from reconcile.extract3d.stitch import (
+    dedup_duplicate_vertical_stitches,
+    snap_stitches_to_non_owner_walls,
+)
 
 
 def parse_transform(flat):
@@ -179,6 +186,74 @@ def load_raw_rooms(scan_dir):
     return rooms
 
 
+def load_raw_ceilings(scan_dir):
+    """Load per-room ceiling plane sets from `ceiling_<room-id>.json` (raw variant).
+
+    Each ceiling file can contain multiple plane entries under `walls` — one
+    flat + several sloped planes for vaulted/pitched rooms. All planes are
+    returned; the caller is expected to apply the same per-room SVD
+    `(rot, trans)` used for walls/openings to remap into merged-building space.
+
+    Keyed by the raw-room filename (`<room-id>.json`) so it lines up with
+    entries returned by `load_raw_rooms`.
+    """
+    ceilings = {}
+    if scan_dir is None or not os.path.isdir(scan_dir):
+        return ceilings
+    prefix = "ceiling_"
+    skip = ("ceiling_merged_", "ceiling_metadata_")
+    for f in sorted(os.listdir(scan_dir)):
+        if not f.startswith(prefix) or not f.endswith(".json"):
+            continue
+        if any(f.startswith(s) for s in skip):
+            continue
+        room_id = f[len(prefix):-len(".json")]
+        room_key = f"{room_id}.json"
+        with open(scan_dir / f) as fh:
+            data = json.load(fh)
+        source = "scan"
+        meta_path = scan_dir / f"ceiling_metadata_{room_id}.json"
+        if meta_path.exists():
+            try:
+                with open(meta_path) as mh:
+                    meta = json.load(mh)
+                src_obj = meta.get("ceilingSource") or {}
+                if isinstance(src_obj, dict) and src_obj:
+                    source = next(iter(src_obj.keys()))
+            except (json.JSONDecodeError, OSError):
+                pass
+        planes = []
+        for wall in data.get("walls") or []:
+            corners_local = wall.get("polygonCorners") or []
+            transform = wall.get("transform")
+            if len(corners_local) < 3 or transform is None:
+                continue
+            planes.append({"corners_local": corners_local, "transform": transform})
+        ceilings[room_key] = {"planes": planes, "source": source}
+    return ceilings
+
+
+def build_raw_to_merged_index(raw_rooms, merged_data):
+    """Map each raw room filename to its best-matching merged room index."""
+    mapping = {}
+    merged_rooms = merged_data.get("rooms", [])
+    for rname, rdata in raw_rooms:
+        raw_wall_ids = {w["identifier"] for w in rdata.get("walls", [])}
+        if not raw_wall_ids:
+            continue
+        best_idx = -1
+        best_overlap = 0
+        for idx, mr in enumerate(merged_rooms):
+            merged_ids = {w["identifier"] for w in mr.get("walls", [])}
+            overlap = len(raw_wall_ids & merged_ids)
+            if overlap > best_overlap:
+                best_idx = idx
+                best_overlap = overlap
+        if best_idx >= 0:
+            mapping[rname] = best_idx
+    return mapping
+
+
 def compute_room_transforms(raw_rooms, merged_data):
     """Compute SVD transforms from raw rooms to building space.
 
@@ -310,42 +385,176 @@ def _wall_xz_normal(corners):
     return (-dz / length, dx / length)
 
 
-def _is_wall_covered_by_winner(wall, winner_walls, max_dist=0.5, max_angle_deg=30.0):
-    """Check if a wall has a nearby parallel wall in the winning room.
-
-    A wall is "covered" if the winning room has a wall that is close
-    (XZ midpoint distance < max_dist) and roughly parallel (angle < max_angle_deg).
-    Covered walls are shared internal walls; uncovered walls are likely external.
-    """
-    corners = wall.get("corners", [])
+def _wall_base_segment_xz(corners):
     if len(corners) < 2:
-        return True  # can't determine, assume covered
+        return None
+    start = (float(corners[0][0]), float(corners[0][2]))
+    end = (float(corners[1][0]), float(corners[1][2]))
+    if math.hypot(end[0] - start[0], end[1] - start[1]) < 1e-6:
+        return None
+    return LineString([start, end])
 
-    mid = _element_xz_midpoint(corners)
-    normal = _wall_xz_normal(corners)
-    if mid is None or normal is None:
-        return True
 
-    for w in winner_walls:
-        wc = w.get("corners", [])
-        if len(wc) < 2:
+def _wall_segment_overlap_with_region(wall, region_poly, buffer=0.15):
+    if region_poly is None or region_poly.is_empty:
+        return 0.0, None
+    segment = _wall_base_segment_xz(wall.get("corners", []))
+    if segment is None:
+        return 0.0, None
+    clipped = segment.intersection(region_poly.buffer(buffer))
+    if clipped.is_empty:
+        return 0.0, None
+    return float(clipped.length), clipped
+
+
+def _project_line_interval(line, origin, direction):
+    coords = list(line.coords)
+    ts = [
+        (coord[0] - origin[0]) * direction[0] + (coord[1] - origin[1]) * direction[1]
+        for coord in coords
+    ]
+    return min(ts), max(ts)
+
+
+def _winner_wall_covers_overlap_segment(
+    wall,
+    winner_walls,
+    overlap_poly,
+    *,
+    buffer=0.15,
+    max_offset_m=0.2,
+    max_angle_deg=12.0,
+    min_overlap_fraction=0.35,
+):
+    wall_segment = _wall_base_segment_xz(wall.get("corners", []))
+    if wall_segment is None:
+        return True, {"reason": "invalid_loser_segment"}
+
+    overlap_len, overlap_segment = _wall_segment_overlap_with_region(
+        wall, overlap_poly, buffer=buffer
+    )
+    if overlap_segment is None or overlap_len <= 1e-6:
+        return False, {"reason": "no_overlap_segment", "overlap_length_m": round(overlap_len, 6)}
+
+    direction = np.array(wall_segment.coords[1]) - np.array(wall_segment.coords[0])
+    segment_length = float(np.linalg.norm(direction))
+    if segment_length <= 1e-6:
+        return True, {"reason": "degenerate_loser_segment"}
+    unit_dir = direction / segment_length
+    origin = np.array(wall_segment.coords[0], dtype=float)
+    target_start, target_end = _project_line_interval(overlap_segment, origin, unit_dir)
+    target_length = max(target_end - target_start, 0.0)
+    if target_length <= 1e-6:
+        return False, {"reason": "zero_target_interval", "overlap_length_m": round(overlap_len, 6)}
+
+    best = {
+        "reason": "no_winner_match",
+        "overlap_length_m": round(overlap_len, 6),
+        "best_fraction": 0.0,
+        "best_offset_m": None,
+        "best_angle_deg": None,
+    }
+    loser_normal = _wall_xz_normal(wall.get("corners", []))
+
+    for winner_wall in winner_walls:
+        winner_segment = _wall_base_segment_xz(winner_wall.get("corners", []))
+        if winner_segment is None:
             continue
-        w_mid = _element_xz_midpoint(wc)
-        w_normal = _wall_xz_normal(wc)
-        if w_mid is None or w_normal is None:
+        winner_normal = _wall_xz_normal(winner_wall.get("corners", []))
+        if loser_normal is None or winner_normal is None:
+            continue
+        dot = abs(loser_normal[0] * winner_normal[0] + loser_normal[1] * winner_normal[1])
+        angle_deg = math.degrees(math.acos(min(dot, 1.0)))
+        if angle_deg > max_angle_deg:
+            continue
+        offset_m = float(winner_segment.distance(overlap_segment))
+        if offset_m > max_offset_m:
             continue
 
-        dist = math.hypot(mid[0] - w_mid[0], mid[1] - w_mid[1])
-        if dist > max_dist:
+        winner_start, winner_end = _project_line_interval(winner_segment, origin, unit_dir)
+        projected_overlap = max(0.0, min(target_end, winner_end) - max(target_start, winner_start))
+        overlap_fraction = projected_overlap / target_length if target_length > 1e-6 else 0.0
+        if overlap_fraction > best["best_fraction"]:
+            best = {
+                "reason": "winner_match",
+                "overlap_length_m": round(overlap_len, 6),
+                "best_fraction": round(overlap_fraction, 6),
+                "best_offset_m": round(offset_m, 6),
+                "best_angle_deg": round(angle_deg, 6),
+            }
+        if overlap_fraction >= min_overlap_fraction:
+            return True, best
+
+    return False, best
+
+
+def _reassign_raw_ceiling_planes_spatially(rooms_out):
+    """Move each raw ceiling plane to the room whose floor it actually sits over.
+
+    See reconcile/extract3d/ceilings.py::reassign_raw_ceiling_planes_spatially
+    for rationale — this is the inline twin used by the CLI pipeline.
+    """
+    room_polys = []
+    for room in rooms_out:
+        fp = room.get("floor_polygon") or []
+        if len(fp) < 3:
+            room_polys.append(None)
             continue
+        try:
+            poly = Polygon([(c[0], c[2]) for c in fp])
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            room_polys.append(poly if poly.is_valid and not poly.is_empty else None)
+        except Exception:
+            room_polys.append(None)
 
-        dot = abs(normal[0] * w_normal[0] + normal[1] * w_normal[1])
-        dot = min(dot, 1.0)
-        angle_deg = math.degrees(math.acos(dot))
-        if angle_deg <= max_angle_deg:
-            return True
+    reassignments = [[] for _ in rooms_out]
+    for src_idx, room in enumerate(rooms_out):
+        src_story = room.get("story", 0)
+        for plane in room.get("raw_ceiling_planes") or []:
+            corners = plane.get("corners") or []
+            if len(corners) < 3:
+                reassignments[src_idx].append(plane)
+                continue
+            xs = [c[0] for c in corners]
+            zs = [c[2] for c in corners]
+            centroid = Point(sum(xs) / len(xs), sum(zs) / len(zs))
+            target_idx = None
+            for ridx, poly in enumerate(room_polys):
+                if poly is None or rooms_out[ridx].get("story", 0) != src_story:
+                    continue
+                if poly.contains(centroid):
+                    target_idx = ridx
+                    break
+            if target_idx is None:
+                try:
+                    plane_poly = Polygon([(c[0], c[2]) for c in corners])
+                    if not plane_poly.is_valid:
+                        plane_poly = plane_poly.buffer(0)
+                except Exception:
+                    plane_poly = None
+                if (
+                    plane_poly is not None
+                    and plane_poly.is_valid
+                    and not plane_poly.is_empty
+                ):
+                    best_area = 0.0
+                    for ridx, poly in enumerate(room_polys):
+                        if poly is None or rooms_out[ridx].get("story", 0) != src_story:
+                            continue
+                        try:
+                            inter = poly.intersection(plane_poly).area
+                        except Exception:
+                            inter = 0.0
+                        if inter > best_area:
+                            best_area = inter
+                            target_idx = ridx
+            if target_idx is None:
+                target_idx = src_idx
+            reassignments[target_idx].append(plane)
 
-    return False
+    for ridx, room in enumerate(rooms_out):
+        room["raw_ceiling_planes"] = reassignments[ridx]
 
 
 def _clip_floor_overlaps(rooms_out):
@@ -413,10 +622,24 @@ def _clip_floor_overlaps(rooms_out):
             # room (shared internal walls).  External walls that have no
             # nearby parallel counterpart in the winner are kept.
             overlap_for_test = make_valid(unary_union(_decompose_polys(overlap)))
+            removed_region = make_valid(poly.difference(clipped))
 
-            candidate_removed_walls, kept_walls = _elements_in_overlap(
-                rooms_out[ri]["walls_computed"], overlap_for_test
-            )
+            candidate_removed_walls = []
+            kept_walls = []
+            wall_decisions = []
+            for wall in rooms_out[ri]["walls_computed"]:
+                overlap_len, _ = _wall_segment_overlap_with_region(
+                    wall, removed_region, buffer=0.15
+                )
+                if overlap_len > 1e-6:
+                    candidate_removed_walls.append(wall)
+                    wall_decisions.append({
+                        "wall_id": wall.get("id"),
+                        "candidate_overlap_length_m": round(overlap_len, 6),
+                        "decision": "candidate",
+                    })
+                else:
+                    kept_walls.append(wall)
             removed_doors, kept_doors = _elements_in_overlap(
                 rooms_out[ri].get("doors", []), overlap_for_test
             )
@@ -427,16 +650,21 @@ def _clip_floor_overlaps(rooms_out):
             # Collect all walls from winning rooms that overlap this region
             winner_walls = []
             for winner_ri, winner_poly in story_claim_order[story]:
-                if winner_poly.intersects(overlap_for_test):
+                if winner_poly.intersects(removed_region.buffer(0.15)):
                     winner_walls.extend(rooms_out[winner_ri]["walls_computed"])
 
             # Keep external walls (not covered by any winner wall)
             removed_walls = []
             for w in candidate_removed_walls:
-                if _is_wall_covered_by_winner(w, winner_walls):
+                covered, detail = _winner_wall_covers_overlap_segment(
+                    w, winner_walls, removed_region
+                )
+                if covered:
                     removed_walls.append(w)
+                    wall_decisions.append({"wall_id": w.get("id"), "decision": "removed", **detail})
                 else:
                     kept_walls.append(w)
+                    wall_decisions.append({"wall_id": w.get("id"), "decision": "kept", **detail})
 
             rooms_out[ri]["walls_computed"] = kept_walls
             rooms_out[ri]["walls_removed_overlap"] = removed_walls
@@ -469,6 +697,7 @@ def _clip_floor_overlaps(rooms_out):
                 "clipped_area_m2": round(clipped.area, 3),
                 "overlap_area_m2": round(overlap.area, 3),
                 "walls_removed": len(removed_walls),
+                "wall_decisions": wall_decisions,
                 "doors_transferred": len(removed_doors),
                 "windows_transferred": len(removed_windows),
             })
@@ -563,12 +792,27 @@ def _clip_walls_to_story_bounds(rooms_out, story_y_map):
 
         # Skip half-floor rooms (stairwell landings, mezzanines)
         fp = room["floor_polygon"]
+        room_floor_y = None
         if fp and len(fp) >= 3:
             room_floor_y = float(np.mean([c[1] for c in fp]))
             if abs(room_floor_y - story_y_map[story]) > MAX_HALF_FLOOR:
                 continue
 
         y_floor, y_ceiling = story_bounds[story]
+
+        # Split-level opt-out: if the room's own floor polygon agrees with its
+        # walls' minimum y, the room is an extension at its own elevation (e.g.
+        # sunroom or garage step-down). Trust the room over the story aggregate
+        # for the bottom-clip baseline. Ceiling baseline stays on the story.
+        effective_floor_y = y_floor
+        if room_floor_y is not None:
+            wall_bottoms = [
+                min(c[1] for c in w["corners"])
+                for w in room["walls_computed"]
+                if len(w.get("corners") or []) >= 3
+            ]
+            if wall_bottoms and abs(room_floor_y - min(wall_bottoms)) <= 0.10:
+                effective_floor_y = room_floor_y
 
         for w in room["walls_computed"]:
             walls_checked += 1
@@ -585,7 +829,7 @@ def _clip_walls_to_story_bounds(rooms_out, story_y_map):
             if y_ceiling is not None and wall_max_y > y_ceiling + TOP_EPSILON:
                 need_clip = True
             # Check bottom
-            if wall_min_y < y_floor - BOTTOM_TOL:
+            if wall_min_y < effective_floor_y - BOTTOM_TOL:
                 need_clip = True
 
             if not need_clip:
@@ -598,10 +842,10 @@ def _clip_walls_to_story_bounds(rooms_out, story_y_map):
                     if c[1] > y_ceiling:
                         c[1] = y_ceiling
 
-            if wall_min_y < y_floor - BOTTOM_TOL:
+            if wall_min_y < effective_floor_y - BOTTOM_TOL:
                 for c in new_corners:
-                    if c[1] < y_floor:
-                        c[1] = y_floor
+                    if c[1] < effective_floor_y:
+                        c[1] = effective_floor_y
 
             w["corners_original"] = corners
             w["corners"] = new_corners
@@ -1057,6 +1301,31 @@ def _compute_gap_walls(gaps, rooms_out, story_y_map, gap_closures=None):
                 gw["room_index"] = gap["room_index"]
             walls.append(gw)
 
+        # Polygon-wide floor + ceiling caps for the whole gap polygon.
+        # Vertical walls alone leave a visible hole in the floor for long
+        # ribbons (e.g. the clip-sliver between rooms that share a boundary
+        # but have different floor Ys). Matches reconcile_v3.close_obvious_gaps.
+        if corners_3d[0] == corners_3d[-1]:
+            cap_verts = corners_3d[:-1]
+        else:
+            cap_verts = corners_3d
+        if len(cap_verts) >= 3:
+            cap_ceiling_y = float(np.median([yt for _, yt in vertex_ys[:len(cap_verts)]]))
+            walls.append({
+                "corners": [[v[0], gap_floor_y, v[2]] for v in cap_verts],
+                "type": "gap_floor",
+                "story": story,
+                "confidence": gap["confidence"],
+                **({"room_index": gap["room_index"]} if "room_index" in gap else {}),
+            })
+            walls.append({
+                "corners": [[v[0], cap_ceiling_y, v[2]] for v in cap_verts],
+                "type": "gap_ceiling",
+                "story": story,
+                "confidence": gap["confidence"],
+                **({"room_index": gap["room_index"]} if "room_index" in gap else {}),
+            })
+
     return walls
 
 
@@ -1359,26 +1628,6 @@ def _flat_ceiling_fallback(rooms, slab_y):
         room["ceiling_eave_height"] = ceil_y
 
 
-def _find_closest_slab_y(wall_corners, slabs_above):
-    """Find the Y of the closest slab (by XZ distance) from the story above.
-
-    slabs_above: list of (centroid_x, centroid_z, slab_y)
-    Returns slab_y or None if no slabs available.
-    """
-    if not slabs_above:
-        return None
-    wx = np.mean([c[0] for c in wall_corners])
-    wz = np.mean([c[2] for c in wall_corners])
-    best_dist = float("inf")
-    best_y = None
-    for sx, sz, sy in slabs_above:
-        d = math.hypot(wx - sx, wz - sz)
-        if d < best_dist:
-            best_dist = d
-            best_y = sy
-    return best_y
-
-
 def _wall_xz_length(corners):
     """Compute the XZ-plane length of a wall/element from its corners."""
     if len(corners) < 2:
@@ -1388,6 +1637,60 @@ def _wall_xz_length(corners):
     dx = c[1][0] - c[0][0]
     dz = c[1][2] - c[0][2]
     return math.hypot(dx, dz)
+
+
+def _canonicalize_wall_quad(corners):
+    """Normalize a wall with arbitrary corner count/order to a 4-corner
+    quad ``[bl, br, tr, tl]`` whose bottom edge is the wall's length axis.
+
+    Canonical 4-corner walls round-trip unchanged; walls with 5+ corners
+    or non-canonical ordering are reduced to a quad suitable for the
+    gap-closure construction that assumes ``corners[0..1]`` is the
+    bottom edge.
+    """
+    if len(corners) < 4:
+        return [list(c) for c in corners]
+    arr = [list(c) for c in corners]
+    ys = [c[1] for c in arr]
+    if max(ys) - min(ys) < 1e-3:
+        return arr
+    mid_y = (max(ys) + min(ys)) / 2.0
+    bot_cs = [c for c in arr if c[1] < mid_y + 0.01]
+    top_cs = [c for c in arr if c[1] > mid_y - 0.01]
+    if len(bot_cs) < 2 or len(top_cs) < 2:
+        return arr
+
+    bl, br = bot_cs[0], bot_cs[1]
+    best_d2 = -1.0
+    for i in range(len(bot_cs)):
+        for j in range(i + 1, len(bot_cs)):
+            dx = bot_cs[i][0] - bot_cs[j][0]
+            dz = bot_cs[i][2] - bot_cs[j][2]
+            d2 = dx * dx + dz * dz
+            if d2 > best_d2:
+                best_d2 = d2
+                bl, br = bot_cs[i], bot_cs[j]
+
+    ref_dx = arr[1][0] - arr[0][0]
+    ref_dz = arr[1][2] - arr[0][2]
+    if (br[0] - bl[0]) * ref_dx + (br[2] - bl[2]) * ref_dz < 0:
+        bl, br = br, bl
+
+    def _nearest(x, z, candidates):
+        best = candidates[0]
+        best_d2 = float("inf")
+        for c in candidates:
+            dx = c[0] - x
+            dz = c[2] - z
+            d2 = dx * dx + dz * dz
+            if d2 < best_d2:
+                best_d2 = d2
+                best = c
+        return best
+
+    tl = _nearest(bl[0], bl[2], top_cs)
+    tr = _nearest(br[0], br[2], top_cs)
+    return [list(bl), list(br), list(tr), list(tl)]
 
 
 def _detect_exterior_gap_indicators(rooms_out):
@@ -1603,18 +1906,20 @@ def _compute_gap_closures(indicators, rooms_out):
                     element_parent_wall[elem["id"]] = pid
 
     for ind in indicators:
-        wc = np.array(ind["wall_corners"])
-        if len(wc) < 4:
+        wc_raw = ind["wall_corners"]
+        if len(wc_raw) < 4:
             continue
+        wc = np.array(_canonicalize_wall_quad(wc_raw))
 
         # Find the parent wall of the element; fall back to element corners
         parent_id = element_parent_wall.get(ind["element_id"])
         if parent_id and parent_id in all_walls_by_id:
-            pc = np.array(all_walls_by_id[parent_id])
+            pc_raw = all_walls_by_id[parent_id]
         else:
-            pc = np.array(ind["element_corners"])
-        if len(pc) < 4:
+            pc_raw = ind["element_corners"]
+        if len(pc_raw) < 4:
             continue
+        pc = np.array(_canonicalize_wall_quad(pc_raw))
 
         # Wall direction: along the bottom edge of the parallel wall (XZ plane)
         wall_dir = wc[1] - wc[0]
@@ -1894,6 +2199,140 @@ def _stitch_wall_gaps(rooms_out):
             ri1, wi1 = wk1
             ri2, wi2 = wk2
 
+            CAP_REACH = 0.20
+            w1c = rooms_out[ri1]["walls_computed"][wi1]["corners"]
+            w2c = rooms_out[ri2]["walls_computed"][wi2]["corners"]
+
+            def _wall_dir(corners):
+                dx = corners[1][0] - corners[0][0]
+                dz = corners[1][2] - corners[0][2]
+                ln = math.hypot(dx, dz)
+                return (dx / ln, dz / ln) if ln > 1e-6 else (0.0, 0.0)
+
+            d1 = _wall_dir(w1c)
+            d2 = _wall_dir(w2c)
+            # Inward sign: points FROM the stitch endpoint back into the
+            # parent wall. Outward sign is the opposite — it points past
+            # the endpoint to where the missing corner would be.
+            inward_sign1 = 1.0 if ei1 == 0 else -1.0
+            inward_sign2 = 1.0 if ei2 == 0 else -1.0
+            u1_out = (-inward_sign1 * d1[0], -inward_sign1 * d1[1])
+            u2_out = (-inward_sign2 * d2[0], -inward_sign2 * d2[1])
+
+            # Intersect outward rays P1 + t*u1_out and P2 + s*u2_out in XZ.
+            # Solve: u1_out*t - u2_out*s = P2 - P1.
+            det = u2_out[0] * u1_out[1] - u1_out[0] * u2_out[1]
+            corner_xz = None
+            if abs(det) > 1e-6:
+                rhs_x = x2 - x1
+                rhs_z = z2 - z1
+                t = (u2_out[0] * rhs_z - u2_out[1] * rhs_x) / det
+                s = (u1_out[0] * rhs_z - u1_out[1] * rhs_x) / det
+                max_reach = max(best_dist * 1.5, MUTUAL_THRESH)
+                if 0.0 <= t <= max_reach and 0.0 <= s <= max_reach:
+                    corner_xz = (x1 + t * u1_out[0], z1 + t * u1_out[1])
+
+            if corner_xz is not None:
+                cx, cz = corner_xz
+                # Two perpendicular stitch walls meeting at the corner C,
+                # each parallel to its parent wall.
+                stitch_walls.append({
+                    "corners": [
+                        [x1, y_bot, z1],
+                        [cx, y_bot, cz],
+                        [cx, y_top, cz],
+                        [x1, y_top, z1],
+                    ],
+                    "story": story,
+                    "type": "stitch",
+                    "room_index": ri1,
+                    "room_indices": [ri1, ri2],
+                })
+                stitch_walls.append({
+                    "corners": [
+                        [x2, y_bot, z2],
+                        [cx, y_bot, cz],
+                        [cx, y_top, cz],
+                        [x2, y_top, z2],
+                    ],
+                    "story": story,
+                    "type": "stitch",
+                    "room_index": ri2,
+                    "room_indices": [ri1, ri2],
+                })
+                # Triangular floor/ceiling caps fill the area enclosed by
+                # the two L-shape walls and the P1-P2 line.
+                stitch_walls.append({
+                    "corners": [
+                        [x1, y_bot, z1], [cx, y_bot, cz], [x2, y_bot, z2],
+                    ],
+                    "story": story,
+                    "type": "stitch_floor",
+                    "room_index": ri1,
+                    "room_indices": [ri1, ri2],
+                })
+                stitch_walls.append({
+                    "corners": [
+                        [x1, y_top, z1], [cx, y_top, cz], [x2, y_top, z2],
+                    ],
+                    "story": story,
+                    "type": "stitch_ceiling",
+                    "room_index": ri1,
+                    "room_indices": [ri1, ri2],
+                })
+                continue
+
+            # Secondary fallback: walls near-parallel or the two-wall
+            # intersection was out of bounds. Build the L-shape on wall 1's
+            # axis alone — one leg parallel to d1, one leg perpendicular.
+            along = (x2 - x1) * d1[0] + (z2 - z1) * d1[1]
+            cx = x1 + along * d1[0]
+            cz = z1 + along * d1[1]
+            parallel_len = abs(along)
+            perp_len = math.hypot((x2 - x1) - along * d1[0], (z2 - z1) - along * d1[1])
+            legs: list[tuple[tuple[float, float], tuple[float, float]]] = []
+            if parallel_len > 1e-3:
+                legs.append(((x1, z1), (cx, cz)))
+            if perp_len > 1e-3:
+                legs.append(((cx, cz), (x2, z2)))
+
+            if legs:
+                for (ax, az), (bx, bz) in legs:
+                    stitch_walls.append({
+                        "corners": [
+                            [ax, y_bot, az],
+                            [bx, y_bot, bz],
+                            [bx, y_top, bz],
+                            [ax, y_top, az],
+                        ],
+                        "story": story,
+                        "type": "stitch",
+                        "room_index": ri1,
+                        "room_indices": [ri1, ri2],
+                    })
+                # Triangular floor/ceiling caps connecting P1 → C → P2.
+                stitch_walls.append({
+                    "corners": [
+                        [x1, y_bot, z1], [cx, y_bot, cz], [x2, y_bot, z2],
+                    ],
+                    "story": story,
+                    "type": "stitch_floor",
+                    "room_index": ri1,
+                    "room_indices": [ri1, ri2],
+                })
+                stitch_walls.append({
+                    "corners": [
+                        [x1, y_top, z1], [cx, y_top, cz], [x2, y_top, z2],
+                    ],
+                    "story": story,
+                    "type": "stitch_ceiling",
+                    "room_index": ri1,
+                    "room_indices": [ri1, ri2],
+                })
+                continue
+
+            # Degenerate fallback: both legs ~zero — just emit the old
+            # single quad + inline caps (shouldn't happen in practice).
             stitch_walls.append({
                 "corners": [
                     [x1, y_bot, z1],
@@ -1907,29 +2346,11 @@ def _stitch_wall_gaps(rooms_out):
                 "room_indices": [ri1, ri2],
             })
 
-            # Floor and ceiling caps: extend a small quad along each parent
-            # wall's direction to seal the top and bottom of the stitch gap.
-            CAP_REACH = 0.20
-            w1c = rooms_out[ri1]["walls_computed"][wi1]["corners"]
-            w2c = rooms_out[ri2]["walls_computed"][wi2]["corners"]
-
-            def _wall_dir(corners):
-                dx = corners[1][0] - corners[0][0]
-                dz = corners[1][2] - corners[0][2]
-                ln = math.hypot(dx, dz)
-                return (dx / ln, dz / ln) if ln > 1e-6 else (0.0, 0.0)
-
-            d1 = _wall_dir(w1c)
-            d2 = _wall_dir(w2c)
-            # Inward direction: end==0 -> +dir, end==1 -> -dir
-            s1 = 1.0 if ei1 == 0 else -1.0
-            s2 = 1.0 if ei2 == 0 else -1.0
             reach = min(CAP_REACH, best_dist)
-
-            ix1 = x1 + s1 * d1[0] * reach
-            iz1 = z1 + s1 * d1[1] * reach
-            ix2 = x2 + s2 * d2[0] * reach
-            iz2 = z2 + s2 * d2[1] * reach
+            ix1 = x1 + inward_sign1 * d1[0] * reach
+            iz1 = z1 + inward_sign1 * d1[1] * reach
+            ix2 = x2 + inward_sign2 * d2[0] * reach
+            iz2 = z2 + inward_sign2 * d2[1] * reach
 
             stitch_walls.append({
                 "corners": [
@@ -1952,7 +2373,8 @@ def _stitch_wall_gaps(rooms_out):
                 "room_indices": [ri1, ri2],
             })
 
-    return stitch_walls
+    stitch_walls = snap_stitches_to_non_owner_walls(rooms_out, stitch_walls)
+    return dedup_duplicate_vertical_stitches(stitch_walls)
 
 
 def extract_building(uuid, pipeline_dir, scan_cache_root):
@@ -2016,6 +2438,44 @@ def extract_building(uuid, pipeline_dir, scan_cache_root):
     scan_dir = find_scan_cache_dir(uuid, scan_cache_root) if scan_cache_root else None
     raw_rooms = load_raw_rooms(scan_dir) if scan_dir else []
     raw_transforms = compute_room_transforms(raw_rooms, merged) if raw_rooms else {}
+
+    # Raw per-room ceilings — multi-plane (flat + sloped pieces for vaulted
+    # rooms). Remapped via the same per-room SVD used for walls so they land
+    # in merged-building space.
+    raw_ceilings = load_raw_ceilings(scan_dir) if scan_dir else {}
+    raw_to_merged = (
+        build_raw_to_merged_index(raw_rooms, merged) if raw_rooms else {}
+    )
+    ceilings_by_merged_idx = {}
+    for rname, merged_idx in raw_to_merged.items():
+        ceiling = raw_ceilings.get(rname)
+        if ceiling is None or not ceiling.get("planes"):
+            continue
+        svd = raw_transforms.get(rname)
+        if svd is None:
+            continue
+        R_room, t_room, _res, _method = svd
+        remapped = []
+        for plane in ceiling["planes"]:
+            world_corners = corners_to_world(
+                plane["corners_local"], plane["transform"]
+            )
+            remapped_corners = [
+                [round(float(c[0]), 4), round(float(c[1]), 4), round(float(c[2]), 4)]
+                for c in (R_room @ np.array(cc) + t_room for cc in world_corners)
+            ]
+            if len(remapped_corners) >= 3:
+                remapped.append({"corners": remapped_corners})
+        if not remapped:
+            continue
+        existing = ceilings_by_merged_idx.get(merged_idx)
+        if existing is None:
+            ceilings_by_merged_idx[merged_idx] = {
+                "planes": remapped,
+                "source": ceiling.get("source"),
+            }
+        else:
+            existing["planes"].extend(remapped)
 
     # Build wall UUID -> raw room + transform mapping
     raw_wall_data = {}  # wall_uuid -> (wall_data, R, t, method)
@@ -2366,6 +2826,10 @@ def extract_building(uuid, pipeline_dir, scan_cache_root):
                 if pid and o["identifier"] not in parent_lookup:
                     parent_lookup[o["identifier"]] = pid
 
+        raw_ceiling = ceilings_by_merged_idx.get(ri)
+        raw_ceiling_planes = raw_ceiling["planes"] if raw_ceiling else []
+        raw_ceiling_source = raw_ceiling["source"] if raw_ceiling else None
+
         rooms_out.append({
             "story": story,
             "floor_polygon": floor_polygon,
@@ -2375,46 +2839,70 @@ def extract_building(uuid, pipeline_dir, scan_cache_root):
             "windows": windows_out,
             "openings": openings_out,
             "storages": storages_out,
+            "raw_ceiling_planes": raw_ceiling_planes,
+            "raw_ceiling_source": raw_ceiling_source,
             "_parent_lookup": parent_lookup,
         })
 
     # Clip overlapping floor polygons within each story
     floor_overlap_metrics = _clip_floor_overlaps(rooms_out)
+    _reassign_raw_ceiling_planes_spatially(rooms_out)
 
-    # Extend raw walls upward to close vertical gaps between floors
-    # Build per-story floor slab index: story -> list of (cx, cz, slab_y)
-    # Filter out half-floor rooms (floor Y far from story median)
+    # Extend raw walls upward to close vertical gaps between floors.
+    # Build per-story slab index: story -> list of (shapely_polygon_xz, floor_y)
+    # plus a matching centroid index for the legacy half-floor median filter.
     MAX_HALF_FLOOR = 0.50
-    story_slab_raw = defaultdict(list)  # story -> [(cx, cz, floor_y)]
+    story_slab_raw = defaultdict(list)  # story -> [(polygon_xz, floor_y)]
+    story_slab_centroid_ys = defaultdict(list)
     for room in rooms_out:
         fp = room["floor_polygon"]
         if fp and len(fp) >= 3:
-            cx = float(np.mean([c[0] for c in fp]))
-            cz = float(np.mean([c[2] for c in fp]))
             cy = float(np.mean([c[1] for c in fp]))
-            story_slab_raw[room["story"]].append((cx, cz, cy))
+            try:
+                poly = Polygon([(c[0], c[2]) for c in fp])
+                if not poly.is_valid:
+                    poly = poly.buffer(0)
+            except Exception:
+                continue
+            if poly.is_empty or not poly.is_valid:
+                continue
+            story_slab_raw[room["story"]].append((poly, cy))
+            story_slab_centroid_ys[room["story"]].append(cy)
 
-    story_slabs = defaultdict(list)
-    for story, entries in story_slab_raw.items():
-        median_y = float(np.median([fy for _, _, fy in entries]))
-        for cx, cz, fy in entries:
-            if abs(fy - median_y) <= MAX_HALF_FLOOR:
-                story_slabs[story].append((cx, cz, fy))
-
-    # Clip walls to story Y boundaries (staircase wall overlap removal)
+    # Build story_y_map from the post-filter Y cluster (used by wall clipping).
+    # Keep all slab polygons in story_slabs — the polygon-aware picker naturally
+    # handles half-level rooms via distance, so no need to exclude them.
+    story_slabs = dict(story_slab_raw)
     story_y_map = {}
-    for story, entries in story_slabs.items():
-        story_y_map[story] = float(np.median([fy for _, _, fy in entries]))
+    for story, ys in story_slab_centroid_ys.items():
+        median_y = float(np.median(ys))
+        kept = [y for y in ys if abs(y - median_y) <= MAX_HALF_FLOOR]
+        story_y_map[story] = float(np.median(kept)) if kept else median_y
     wall_clip_metrics = _clip_walls_to_story_bounds(rooms_out, story_y_map)
 
     for room in rooms_out:
-        slabs_above = story_slabs.get(room["story"] + 1, [])
+        # Consider slabs from every story strictly above this room's story.
+        # Split-level buildings can have a half-floor wing at story+1 whose
+        # footprint sits beside (not over) the wall — its slab then fails
+        # find_best_slab_above's XZ-distance test or sits below the wall top.
+        # Including story+2, +3, ... lets a wall still reach the next full
+        # slab directly overhead. Sorted ascending so ties break toward the
+        # lowest viable slab (physically correct).
+        slabs_above = []
+        for s in sorted(story_slabs):
+            if s > room["story"]:
+                slabs_above.extend(story_slabs[s])
         for w in room["walls_computed"]:
-            slab_y = _find_closest_slab_y(w["corners"], slabs_above)
+            wc = w["corners"]
+            if not wc:
+                w["extension_strip"] = None
+                continue
+            wall_top_y = max(c[1] for c in wc)
+            slab_y = find_best_slab_above(wc, wall_top_y, slabs_above, max_gap=0.80)
             if slab_y is None:
                 w["extension_strip"] = None
                 continue
-            result = _extend_wall_to_slab(w["corners"], slab_y)
+            result = _extend_wall_to_slab(wc, slab_y)
             if result is None:
                 w["extension_strip"] = None
             else:
@@ -2485,6 +2973,7 @@ def extract_building(uuid, pipeline_dir, scan_cache_root):
         "rooms": rooms_out,
         "stories_found": stories_found,
         "stories_changed": stories_changed,
+        "split_level": _is_split_level(rooms_out),
         "computed_walls_total": computed_total,
         "merged_walls_total": merged_total,
         "scan_cache_walls": scan_cache_count,
@@ -2533,7 +3022,11 @@ def main():
     results = []
     for uuid in uuids:
         print(f"Extracting {uuid}...")
-        result = extract_building(uuid, pipeline_dir, scan_cache_root)
+        try:
+            result = extract_building(uuid, pipeline_dir, scan_cache_root)
+        except Exception as exc:
+            print(f"  FAILED ({type(exc).__name__}: {exc})")
+            continue
         if result:
             results.append(result)
             computed_total = result["computed_walls_total"]
@@ -2550,6 +3043,41 @@ def main():
     with open(out_path, "w") as f:
         json.dump(results, f)
     print(f"\nWrote {len(results)} buildings to {out_path}")
+
+    _run_roof_pipeline(results, pipeline_dir, scan_cache_root)
+
+
+def _run_roof_pipeline(buildings: list[dict], pipeline_dir: Path, scan_cache_root: Path) -> None:
+    from reconcile.roof_algorithms_py import run_roof_algorithms
+    from reconcile_v2.graph_builder import build_topology_graph
+
+    roof_out_path = Path("reconcile/roof_algorithms_py_results.json")
+    try:
+        with open(roof_out_path) as f:
+            roof_results: dict = json.load(f)
+    except FileNotFoundError:
+        roof_results = {}
+
+    failures = 0
+    for bldg in buildings:
+        uuid = bldg["uuid"]
+        merged_path = pipeline_dir / uuid / "merged.json"
+        try:
+            graph = build_topology_graph(
+                merged_path=merged_path,
+                scan_dir=scan_cache_root,
+                uuid=uuid,
+            )
+            roof_results[uuid] = run_roof_algorithms(bldg, graph=graph)
+            print(f"  [roof] ok {uuid}")
+        except Exception as exc:
+            failures += 1
+            print(f"  [roof] error {uuid}: {exc}", file=sys.stderr)
+
+    tmp_path = roof_out_path.with_suffix(".tmp.json")
+    tmp_path.write_text(json.dumps(roof_results), encoding="utf-8")
+    tmp_path.replace(roof_out_path)
+    print(f"Wrote roof results for {len(buildings) - failures}/{len(buildings)} buildings to {roof_out_path}")
 
 
 if __name__ == "__main__":

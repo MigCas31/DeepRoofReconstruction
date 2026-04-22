@@ -72,6 +72,55 @@ body { background:#111; color:#ddd; font-family:-apple-system,BlinkMacSystemFont
 .pipeline-step-pill.active { background:#1a1a4a; color:#88f; border:1px solid #44f; }
 
 canvas { display:block; width:100%; height:100%; }
+
+#proposal-panel {
+  display:none; position:absolute; top:60px; left:10px; z-index:16;
+  background:rgba(13,13,26,0.92); border:1px solid #333; border-radius:8px;
+  padding:10px; font-size:11px; width:320px; max-height:70vh; overflow-y:auto;
+}
+#proposal-panel.visible { display:block; }
+#proposal-panel h3 { font-size:12px; margin-bottom:6px; color:#cde; }
+#proposal-panel .kv { display:grid; grid-template-columns:1fr auto; gap:2px 8px; margin-bottom:8px; }
+#proposal-panel .kv .k { color:#888; }
+#proposal-panel .kv .v { color:#ddd; text-align:right; font-variant-numeric:tabular-nums; }
+#proposal-panel .heuristic-row { margin-bottom:8px; padding:4px 6px; background:#1a1a2a; border-radius:4px; }
+#proposal-panel .action-row { display:flex; gap:6px; margin-bottom:8px; }
+#proposal-panel button.action {
+  flex:1; padding:6px 8px; border:1px solid #444; border-radius:4px; cursor:pointer;
+  color:#fff; font-weight:600; font-size:11px;
+}
+#proposal-panel button.accept { background:#166534; }
+#proposal-panel button.accept:hover { background:#22c55e; }
+#proposal-panel button.reject { background:#7f1d1d; }
+#proposal-panel button.reject:hover { background:#ef4444; }
+#proposal-panel button.skip { background:#334155; }
+#proposal-panel button.skip:hover { background:#64748b; }
+#proposal-panel button.split { background:#4c1d95; }
+#proposal-panel button.split:hover { background:#7c3aed; }
+#proposal-panel button.split.active { background:#7c3aed; border-color:#c4b5fd; }
+#proposal-panel .reasons { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:6px; }
+#proposal-panel .reason-chip {
+  font-size:10px; padding:2px 6px; border-radius:10px; background:#2a2a2a;
+  color:#aaa; cursor:pointer; border:1px solid #333;
+}
+#proposal-panel .reason-chip.on { background:#3a1a1a; color:#f88; border-color:#744; }
+#proposal-panel .status-line { color:#888; font-size:10px; min-height:14px; }
+
+#queue-bar {
+  display:none; position:absolute; top:60px; right:10px; z-index:16;
+  background:rgba(13,13,26,0.92); border:1px solid #333; border-radius:8px;
+  padding:6px 8px; font-size:11px; display:none; align-items:center; gap:6px;
+}
+#queue-bar.visible { display:flex; }
+#queue-bar button {
+  padding:3px 8px; border:1px solid #444; border-radius:4px; cursor:pointer;
+  color:#ddd; background:#1a1a2e; font-size:11px;
+}
+#queue-bar button:hover { background:#2a2a3e; }
+#queue-bar button.primary { background:#166534; color:#fff; border-color:#22c55e; }
+#queue-bar button.primary:hover { background:#22c55e; }
+#queue-bar .counter { color:#aaa; font-variant-numeric:tabular-nums; }
+#queue-bar .counter strong { color:#fff; }
 </style>
 </head>
 <body>
@@ -100,6 +149,12 @@ canvas { display:block; width:100%; height:100%; }
       <label><input type="checkbox" id="show-cross-story"> Cross-story gaps</label>
       <label><input type="checkbox" id="show-extensions" checked> Wall extensions</label>
       <label><input type="checkbox" id="show-ceilings"> Ceilings</label>
+      <label><input type="checkbox" id="show-raw-ceilings" checked> Raw ceilings (scan)</label>
+      <label><input type="checkbox" id="show-raw-ceilings-roles"> Raw-ceiling roles</label>
+      <label><input type="checkbox" id="show-raw-ceilings-reconstructions"> Raw-ceiling reconstructions</label>
+      <label><input type="checkbox" id="show-computed-overextend"> Computed overextend (vs raw)</label>
+      <label><input type="checkbox" id="show-raw-disagreement"> Raw orientation disagreement</label>
+      <label><input type="checkbox" id="show-ceiling-replacement"> Clean ceilings (noisy slanted)</label>
       <label><input type="checkbox" id="show-thermal-ceilings"> Thermal ceilings</label>
       <label><input type="checkbox" id="show-roof-clusters"> Roof clusters</label>
       <label><input type="checkbox" id="show-ontology-semantics"> Ontology semantics</label>
@@ -110,6 +165,13 @@ canvas { display:block; width:100%; height:100%; }
       <label><input type="checkbox" id="show-ext-gaps"> Exterior gaps</label>
       <label style="border-left:1px solid #444;padding-left:8px"><input type="checkbox" id="show-full-model"> Full model</label>
       <label><input type="checkbox" id="show-full-model-diff"> Full model diff</label>
+      <label style="border-left:1px solid #444;padding-left:8px"><input type="checkbox" id="show-v3-model"> V3 model</label>
+      <label><input type="checkbox" id="show-v3-gable-extension" checked> V3 gable extension</label>
+      <label><input type="checkbox" id="show-v3-roof-proposals"> V3 roof proposals</label>
+      <label><input type="checkbox" id="merge-v3-roof-proposal-planes" checked> Merge similar planes</label>
+      <label><input type="checkbox" id="show-candidate-faces"> Candidate faces</label>
+      <label><input type="checkbox" id="show-reconstruction"> BIP envelope</label>
+      <label><input type="checkbox" id="show-ridge-eave"> Ridge/eave scoring</label>
       <label><input type="checkbox" id="show-ortho"> Ortho map</label>
       <label><input type="checkbox" id="show-model-map"> Model map</label>
     </div>
@@ -131,6 +193,28 @@ canvas { display:block; width:100%; height:100%; }
     <button id="map-anchor-mode" style="margin-top:4px;">Anchor mode</button>
   </div>
   <div id="building-info"></div>
+  <div id="queue-bar">
+    <span class="counter" id="queue-counter">—</span>
+    <button id="queue-prev" title="Previous proposal">&larr;</button>
+    <button id="queue-next" title="Next proposal">&rarr;</button>
+    <button id="queue-next-unlabeled" class="primary" title="Keyboard: N">Next unlabeled (N)</button>
+  </div>
+  <div id="proposal-panel">
+    <h3>V3 Roof Proposal</h3>
+    <div class="kv" id="proposal-kv"></div>
+    <div class="heuristic-row" id="proposal-heuristic"></div>
+    <div class="reasons" id="proposal-reasons"></div>
+    <div class="action-row">
+      <button class="action accept" data-label="accepted" title="Keyboard: A">Accept (A)</button>
+      <button class="action reject" data-label="rejected" title="Keyboard: R">Reject (R)</button>
+      <button class="action skip" data-label="skipped" title="Keyboard: S">Skip (S)</button>
+    </div>
+    <div class="action-row">
+      <button class="action split" id="proposal-split" title="Keyboard: X">Split (X)</button>
+    </div>
+    <div class="status-line" id="proposal-status"></div>
+    <div class="status-line" style="color:#555;">Keys: A accept, R reject, S skip, X split, N next unlabeled, Esc cancel</div>
+  </div>
   <canvas id="c"></canvas>
 </div>
 
@@ -142,6 +226,6 @@ canvas { display:block; width:100%; height:100%; }
   }
 }
 </script>
-<script type="module" src="viewer-main.js"></script>
+<script type="module" src="viewer-main.js?v=20260421rawceilclick"></script>
 </body>
 </html>

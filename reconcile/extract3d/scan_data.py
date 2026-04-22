@@ -54,6 +54,83 @@ def load_raw_rooms(scan_dir):
     return rooms
 
 
+def load_raw_ceilings(scan_dir):
+    """Load per-room raw ceiling polygons captured by Apple RoomPlan.
+
+    Reads `ceiling_<room-id>.json` (per-session, in raw scan world space — not
+    the pre-merged variant) plus the sibling `ceiling_metadata_<room-id>.json`.
+    Each ceiling file can contain multiple "wall" entries, one per planar
+    surface (flat + sloped segments for vaulted/pitched ceilings). All planes
+    are returned; the caller is expected to apply the same per-room SVD
+    `(rot, trans)` used for walls to remap into merged-building space.
+
+    Keyed by the raw-room filename `<room-id>.json` so it lines up with the
+    entries returned by `load_raw_rooms`.
+    """
+    ceilings = {}
+    if scan_dir is None or not os.path.isdir(scan_dir):
+        return ceilings
+    prefix = "ceiling_"
+    skip = ("ceiling_merged_", "ceiling_metadata_")
+    for filename in sorted(os.listdir(scan_dir)):
+        if not filename.startswith(prefix) or not filename.endswith(".json"):
+            continue
+        if any(filename.startswith(s) for s in skip):
+            continue
+        room_id = filename[len(prefix):-len(".json")]
+        room_key = f"{room_id}.json"
+        with open(scan_dir / filename) as handle:
+            data = json.load(handle)
+        source = "scan"
+        meta_path = scan_dir / f"ceiling_metadata_{room_id}.json"
+        if meta_path.exists():
+            try:
+                with open(meta_path) as meta_handle:
+                    meta = json.load(meta_handle)
+                src_obj = meta.get("ceilingSource") or {}
+                if isinstance(src_obj, dict) and src_obj:
+                    source = next(iter(src_obj.keys()))
+            except (json.JSONDecodeError, OSError):
+                pass
+        planes = []
+        for wall in data.get("walls") or []:
+            corners_local = wall.get("polygonCorners") or []
+            transform = wall.get("transform")
+            if len(corners_local) < 3 or transform is None:
+                continue
+            planes.append({"corners_local": corners_local, "transform": transform})
+        ceilings[room_key] = {"planes": planes, "source": source}
+    return ceilings
+
+
+def build_raw_to_merged_index(raw_rooms, merged_data):
+    """Map each raw room filename to its best-matching merged room index.
+
+    Uses wall-identifier overlap — the same criterion as
+    `compute_room_transforms` — so the result is consistent with the transform
+    method selected for that room.
+    """
+    mapping = {}
+    merged_rooms = merged_data.get("rooms", [])
+    for room_name, room_data in raw_rooms:
+        raw_wall_ids = {wall["identifier"] for wall in room_data.get("walls", [])}
+        if not raw_wall_ids:
+            continue
+        best_idx = -1
+        best_overlap = 0
+        for idx, merged_room in enumerate(merged_rooms):
+            merged_ids = {
+                wall["identifier"] for wall in merged_room.get("walls", [])
+            }
+            overlap = len(raw_wall_ids & merged_ids)
+            if overlap > best_overlap:
+                best_idx = idx
+                best_overlap = overlap
+        if best_idx >= 0:
+            mapping[room_name] = best_idx
+    return mapping
+
+
 def compute_room_transforms(raw_rooms, merged_data):
     """Compute raw-room -> merged-building transforms using SVD."""
     transforms = {}

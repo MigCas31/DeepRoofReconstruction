@@ -82,6 +82,7 @@ Every rendered element has a shareable ID: `<building_uuid>::<kind>::<id>`. Righ
 | `ceiling-flat` | `ceiling-flat:<index>` | building |
 | `ceiling-oblique` | `ceiling-oblique:<index>` | building |
 | `ceiling-simple-slant` | `ceiling-slant:<index>` | building |
+| `ceiling-raw` | `<story>:<room_index>:<plane_index>` | room |
 
 **Key files**: `reconcile/element_locator.py` (backend), `reconcile/viewer-main.js` (frontend: `makeElementUid`, `parseElementUid`, `attachLocator`, `selectElementByUid`)
 
@@ -154,6 +155,19 @@ This is a **computational geometry** codebase — algorithms here have known cor
 - **Keep parity** with calor/web-main where both codebases implement the same logic (e.g., grid convergence)
 - **Visualize your changes** — use the viewer to confirm geometry looks correct, not just that tests pass
 
+## Progress Tracking
+
+Every time you modify files in `reconcile/`, `reconcile_v2/`, or `reconcile_v3/`:
+
+1. **Update `tracking_progress.md`** at the repo root with a new entry
+2. Each entry must include:
+   - **Date** (YYYY-MM-DD)
+   - **What changed** — which files/modules were modified and what the change does
+   - **Why** — the motivation: what problem it solves, what hypothesis it tests, or what goal it advances
+   - **Result** — outcome if known (test results, corpus metrics, visual verification)
+3. Append to the end of the file (chronological order, newest last)
+4. Include enough detail that a reader can understand the problem, what was tried, and why — document failed approaches and pivots, not just successes
+
 ## Gotchas
 
 **CRITICAL**: Azimuth filtering uses **180** degree threshold, NOT 90 degrees. The 90-degree range caused false clips in production.
@@ -175,6 +189,7 @@ This is a **computational geometry** codebase — algorithms here have known cor
 | [Testing](/.agents/skills/testing/SKILL.md) | pytest, fixtures, test coverage |
 | [Danish Geodata](/.agents/skills/danish-geodata/SKILL.md) | Datafordeler API, building footprints, WMTS |
 | [Run & Verify](/.agents/skills/run-and-verify/SKILL.md) | End-to-end pipeline runs, server restart, browser verification |
+| [Debug Element](/.agents/skills/debug-element/SKILL.md) | Triage a shareable element ID (legacy or ontology-*), trace to pipeline + thresholds, propose root cause |
 
 ### Using Skills
 

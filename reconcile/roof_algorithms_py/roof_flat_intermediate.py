@@ -5,7 +5,33 @@ from .graph_support import (
     graph_allows_roof_candidate,
     graph_requires_geometry_fallback,
 )
-from .roof_flat_geometry import bbox, bbox_surface
+from .roof_flat_geometry import bbox
+
+
+def _room_polygon_at_y(fp: list, y: float) -> list:
+    """Lift a room's floor polygon to y without AABB-ifying it.
+
+    Earlier we used bbox_surface(fp, y) which replaced the room shape with
+    its axis-aligned bounding box + 0.3m pad — for L-shaped / concave rooms
+    that leaks far outside the building footprint.
+    """
+    return [(p[0], y, p[2]) for p in fp]
+
+
+def _room_ceiling_y(room: dict) -> float | None:
+    # Prefer ceiling_polygon max y (matches the actual ceiling plane).
+    cp = room.get("ceiling_polygon") or []
+    ys = [c[1] for c in cp if isinstance(c, (list, tuple)) and len(c) >= 2]
+    if ys:
+        return max(ys)
+    # Fall back to max wall-corner y (wall-top ≈ ceiling interface).
+    wall_ys: list[float] = []
+    for key in ("walls_merged", "walls_computed"):
+        for wall in room.get(key) or []:
+            for c in wall.get("corners") or []:
+                if isinstance(c, (list, tuple)) and len(c) >= 2:
+                    wall_ys.append(c[1])
+    return max(wall_ys) if wall_ys else None
 
 
 def collect_intermediate_flat_surfaces(
@@ -32,8 +58,12 @@ def collect_intermediate_flat_surfaces(
         if max(max_x - min_x, max_z - min_z) < 2.0:
             continue
 
-        y = fp[0][1]
-        corners = bbox_surface(fp, y)
+        # Intermediate flat represents the top of the room's stack (roof or
+        # floor-of-story-above interface). Place it at the ceiling plane, not
+        # the floor plane — using floor y buries the surface below room height.
+        ceiling_y = _room_ceiling_y(room)
+        y = ceiling_y if ceiling_y is not None else fp[0][1]
+        corners = _room_polygon_at_y(fp, y)
         flat_surfaces.append(
             {
                 "kind": "intermediate",

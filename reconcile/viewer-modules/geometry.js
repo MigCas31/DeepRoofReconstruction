@@ -4,12 +4,36 @@ export function createPolygonMesh(corners, color, opacity, holes = []) {
   if (corners.length < 3) return null;
 
   const p0 = new THREE.Vector3(...corners[0]);
-  let p1 = new THREE.Vector3(...corners[1]);
-  let p2 = new THREE.Vector3(...corners[2]);
-  if (p0.distanceToSquared(p1) < 1e-10 && corners.length > 3) p1 = new THREE.Vector3(...corners[3]);
-  const u = new THREE.Vector3().subVectors(p1, p0).normalize();
-  let n = new THREE.Vector3().subVectors(p1, p0).cross(new THREE.Vector3().subVectors(p2, p0)).normalize();
-  if (n.lengthSq() < 1e-10) n = new THREE.Vector3(0, 1, 0);
+  // Newell's method: normal summed over all edges (v_i - v_{i+1}) * (v_i + v_{i+1}).
+  // Robust to near-duplicate vertices and collinear runs — picking only the
+  // first 3 corners breaks when Shapely intersections emit sub-cm noise near
+  // p0/p1/p2 (the cross product is then dominated by FP noise, and the mesh
+  // is flattened onto a wrong plane).
+  let n = new THREE.Vector3();
+  for (let i = 0; i < corners.length; i++) {
+    const a = corners[i];
+    const b = corners[(i + 1) % corners.length];
+    n.x += (a[1] - b[1]) * (a[2] + b[2]);
+    n.y += (a[2] - b[2]) * (a[0] + b[0]);
+    n.z += (a[0] - b[0]) * (a[1] + b[1]);
+  }
+  if (n.lengthSq() < 1e-10) n.set(0, 1, 0);
+  else n.normalize();
+  // Choose an in-plane ``u`` direction that's well-separated from ``n`` so
+  // the UV basis is well-conditioned. Walk the corners to find the longest
+  // edge projected into the plane.
+  let u = new THREE.Vector3();
+  let bestLen = 0;
+  for (let i = 0; i < corners.length; i++) {
+    const a = corners[i];
+    const b = corners[(i + 1) % corners.length];
+    const e = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+    e.addScaledVector(n, -e.dot(n));
+    const l2 = e.lengthSq();
+    if (l2 > bestLen) { bestLen = l2; u.copy(e); }
+  }
+  if (bestLen < 1e-10) u.set(1, 0, 0);
+  else u.normalize();
   const v = new THREE.Vector3().crossVectors(n, u).normalize();
 
   function dedupeLoop(loop3) {
@@ -67,12 +91,19 @@ export function createPolygonMesh(corners, color, opacity, holes = []) {
 
   if (!THREE.ShapeUtils.isClockWise(contour)) contour = contour.slice().reverse();
   holeContours = holeContours.map(h => THREE.ShapeUtils.isClockWise(h) ? h.slice().reverse() : h);
+  // A fan-from-vertex-0 fallback here renders a giant triangle spanning the
+  // polygon's bounding box whenever triangulation fails on a non-convex or
+  // self-intersecting ring — far worse than rendering nothing.
   let indices;
   try {
     indices = THREE.ShapeUtils.triangulateShape(contour, holeContours);
   } catch (e) {
-    indices = [];
-    for (let i = 1; i < contour.length - 1; i++) indices.push([0, i, i + 1]);
+    console.warn('createPolygonMesh: triangulation failed, skipping mesh', e);
+    return null;
+  }
+  if (!indices || indices.length === 0) {
+    console.warn('createPolygonMesh: triangulation returned no triangles, skipping mesh');
+    return null;
   }
 
   const flat2 = [contour, ...holeContours];

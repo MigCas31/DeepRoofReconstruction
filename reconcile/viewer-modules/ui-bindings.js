@@ -46,23 +46,28 @@ export function bindUIEventHandlers({
   documentRef.addEventListener('keydown', e => {
     const t = e.target;
     if (t === searchInput || (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.tagName === 'BUTTON'))) return;
+    const labelingMode = documentRef.body?.dataset?.mode === 'labeling';
     if (e.key === 'ArrowDown' || e.key === 'j') {
+      if (labelingMode) return;
       e.preventDefault();
       const visible = [...documentRef.querySelectorAll('.bldg-item:not([style*="display: none"])')];
       const curIdx = visible.findIndex(el => el.classList.contains('active'));
       if (curIdx < visible.length - 1) { visible[curIdx + 1]?.click(); visible[curIdx + 1]?.scrollIntoView({ block: 'nearest' }); }
     }
     if (e.key === 'ArrowUp' || e.key === 'k') {
+      if (labelingMode) return;
       e.preventDefault();
       const visible = [...documentRef.querySelectorAll('.bldg-item:not([style*="display: none"])')];
       const curIdx = visible.findIndex(el => el.classList.contains('active'));
       if (curIdx > 0) { visible[curIdx - 1]?.click(); visible[curIdx - 1]?.scrollIntoView({ block: 'nearest' }); }
     }
     if (e.key === 'ArrowRight' || e.key === 'l') {
+      if (labelingMode) return;
       e.preventDefault();
       applyPipelineStep(getPipelineStepIndex() + 1);
     }
     if (e.key === 'ArrowLeft' || e.key === 'h') {
+      if (labelingMode) return;
       e.preventDefault();
       applyPipelineStep(getPipelineStepIndex() - 1);
     }

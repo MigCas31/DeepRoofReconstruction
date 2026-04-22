@@ -4,7 +4,7 @@ import argparse
 import json
 import math
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 
@@ -565,9 +565,7 @@ def main() -> None:
                 "timings_s": {
                     "total": round(elapsed, 6),
                 },
-                "renderable_surface_total": int(
-                    len(payload.get("renderable_surfaces") or [])
-                ),
+                "renderable_surface_total": len(payload.get("renderable_surfaces") or []),
                 "category_counts": {
                     category: int(counts.get(category, 0))
                     for category in TARGET_CATEGORIES
@@ -575,8 +573,8 @@ def main() -> None:
                 "payload_metadata": payload.get("metadata") or {},
                 "summary_metadata": summary.get("metadata") or {},
                 "roof_pipeline_counts": {
-                    "flat_surface_count": len((((roof.get("roof_surfaces") or {}).get("flat")) or [])),
-                    "oblique_surface_count": len((((roof.get("roof_surfaces") or {}).get("oblique")) or [])),
+                    "flat_surface_count": len(((roof.get("roof_surfaces") or {}).get("flat")) or []),
+                    "oblique_surface_count": len(((roof.get("roof_surfaces") or {}).get("oblique")) or []),
                     "roof_evidence_room_count": _roof_evidence_room_count(roof),
                 },
                 "building_part_count": len(summary.get("building_parts") or []),
@@ -610,7 +608,7 @@ def main() -> None:
             aggregate["failed"] += 1
 
         report = {
-            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "generated_at_utc": datetime.now(UTC).isoformat(),
             "aggregate": {
                 **aggregate,
                 "bucket_counts": dict(sorted(bucket_counts.items())),
@@ -695,7 +693,7 @@ def main() -> None:
         )
 
     report = {
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "generated_at_utc": datetime.now(UTC).isoformat(),
         "aggregate": aggregate,
         "missing_roof_class_counts": dict(
             sorted(

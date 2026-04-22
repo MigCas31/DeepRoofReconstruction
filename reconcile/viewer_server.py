@@ -9,6 +9,7 @@ Then open:
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import posixpath
@@ -21,7 +22,9 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from shapely.geometry import LineString, Point, Polygon
+import shapely
+from shapely.geometry import LineString, MultiLineString, Point, Polygon
+from shapely.ops import split as shapely_split
 from shapely.ops import unary_union
 from shapely.validation import make_valid
 
@@ -36,11 +39,266 @@ WMTS_BASE = "https://wmts.datafordeler.dk/GeoDanmarkOrto/orto_foraar_webm/1.0.0/
 SECRET_NAME = "datafordeler-graphql-api-key"
 ROOT_DIR = Path(__file__).resolve().parent
 CALIBRATION_PATH = ROOT_DIR.parent / ".context" / "alignment_calibration.json"
+ROOF_PROPOSAL_LABELS_PATH = (
+    ROOT_DIR.parent / ".context" / "v3_roof_proposal_labels.jsonl"
+)
+ROOF_PROPOSAL_SPLITS_PATH = (
+    ROOT_DIR.parent / ".context" / "v3_roof_proposal_splits.jsonl"
+)
 PIPELINE_ROOT = ROOT_DIR.parent / "pipeline-outputs"
 SCAN_CACHE_ROOT = ROOT_DIR.parent / ".scan-cache"
 ONTOLOGY_CACHE: dict[str, dict] = {}
+V3_RESULTS_PATH = ROOT_DIR / "reconcile_v3_results.json"
+V3_CACHE: dict[str, dict] = {}
+V3_CACHE_MTIME: float = 0.0
+# Phase A candidate faces — produced by `scripts/build_candidate_faces.py`.
+# The viewer loads per-building slices on demand.
+CANDIDATE_FACES_PATH = (
+    ROOT_DIR.parent / "reports" / "candidate_faces_20260419" / "candidates.json"
+)
+CANDIDATE_FACES_CACHE: dict[str, dict] = {}
+CANDIDATE_FACES_CACHE_MTIME: float = 0.0
+# Phase B.1 reconstruction-solver selections — produced by
+# `scripts/run_reconstruction_solver.py`. Joined with candidate faces at
+# request time so the viewer can color the selected subset.
+RECONSTRUCTION_PATH = (
+    ROOT_DIR.parent / "reports" / "reconstruction_20260419_topologyfix"
+    / "selections.json"
+)
+RECONSTRUCTION_CACHE: dict[str, dict] = {}
+RECONSTRUCTION_CACHE_MTIME: float = 0.0
+# Ridge/eave topology scoring — produced by
+# `scripts/score_candidates_ridge_eave.py`. Per-building slice: best-pair
+# scores for each candidate plus the pair geometry (ridge, medial axis,
+# eaves, part OBB) for visual inspection.
+RIDGE_EAVE_SCORES_PATH = (
+    ROOT_DIR.parent / "reports" / "ridge_eave_scores_20260420" / "scores.json"
+)
+RIDGE_EAVE_CACHE: dict[str, dict] = {}
+RIDGE_EAVE_CACHE_MTIME: float = 0.0
+# Phase-2 raw-ceiling prototype — per-plane role + per-room archetype labels
+# plus dormer/wing reconstruction geometry, produced by
+# scripts/prototype_raw_ceiling_roles.py / prototype_dormer_reconstruction.py /
+# prototype_wing_reconstruction.py. Served at /raw-ceiling-prototype as a
+# combined payload the viewer fetches once on startup.
+RAW_CEILING_ROLES_PATH = ROOT_DIR.parent / "reports" / "raw_ceiling_prototype" / "roles.json"
+RAW_CEILING_RECON_PATH = (
+    ROOT_DIR.parent / "reports" / "raw_ceiling_prototype" / "reconstructions.json"
+)
+RAW_CEILING_PROTOTYPE_CACHE: dict = {}
+RAW_CEILING_PROTOTYPE_CACHE_MTIME: tuple[float, float] = (0.0, 0.0)
+# Per-surface overextend polygons produced by
+# scripts/audit_computed_surface_extent_vs_raw.py — one polygon per
+# roof-oblique/roof-flat surface showing the XZ region where the computed
+# surface reaches beyond the union of overlapping raw ceiling planes,
+# lifted to the surface's Y plane.
+COMPUTED_OVEREXTEND_PATH = (
+    ROOT_DIR.parent / "reports" / "computed_extent_vs_raw" / "overextend_polygons.json"
+)
+COMPUTED_OVEREXTEND_CACHE: dict = {}
+COMPUTED_OVEREXTEND_CACHE_MTIME: float = 0.0
+# Raw-ceiling orientation disagreement polygons produced by
+# scripts/audit_raw_orientation_disagreement.py — one polygon per pair of
+# raw ceiling planes that overlap in XZ but carry different fitted normals,
+# i.e. a slope-split the pipeline may have flattened.
+RAW_DISAGREEMENT_PATH = (
+    ROOT_DIR.parent / "reports" / "raw_orientation_disagreement" / "disagreement_polygons.json"
+)
+RAW_DISAGREEMENT_CACHE: dict = {}
+RAW_DISAGREEMENT_CACHE_MTIME: float = 0.0
+# Clean-ceiling replacement polygons produced by
+# scripts/audit_noisy_slanted_ceiling_replacement.py — one polygon per
+# noisy-slanted room, showing the computed oblique roof surface clipped
+# to the room footprint (the "clean plane" that replaces the fragmented
+# raw scan).
+CEILING_REPLACEMENT_PATH = (
+    ROOT_DIR.parent / "reports" / "noisy_slanted_ceilings" / "replacement_polygons.json"
+)
+CEILING_REPLACEMENT_CACHE: dict = {}
+CEILING_REPLACEMENT_CACHE_MTIME: float = 0.0
+# Phase 6/7: optional scored mirror of V3_RESULTS_PATH. When present, the
+# queue endpoint filters to ``autonomy_label == "review"`` and sorts by
+# uncertainty (|score - 0.5| asc).
+V3_SCORED_PATH = ROOT_DIR / "reconcile_v3_results_scored.json"
+# Map of proposal_id → {"score": float, "autonomy_label": str}
+V3_SCORES: dict[str, dict] = {}
+V3_SCORES_MTIME: float = 0.0
 UNASSIGNED_PART_ID = "building-part:unassigned"
 FULL_BUILDING_PART_ID = "building-part:full-building"
+
+# Roof-focused viewer (viewer-roof.html). Loads the full roof pipeline results
+# plus the scan-ceiling audit report once and serves compact per-building
+# payloads. Sources:
+#   * reconcile/roof_algorithms_py_results.json  (segments, clusters,
+#     pre-selection candidate ceiling planes, committed roof surfaces)
+#   * reconcile/buildings_3d.json                (raw scanned ceilings,
+#     address/metadata, room floors)
+#   * reports/scan_ceiling_support.json          (per-surface audit rows)
+ROOF_RESULTS_PATH = ROOT_DIR / "roof_algorithms_py_results.json"
+BUILDINGS_3D_PATH = ROOT_DIR / "buildings_3d.json"
+ROOF_AUDIT_PATH = ROOT_DIR.parent / "reports" / "scan_ceiling_support.json"
+ROOF_RESULTS_CACHE: dict[str, dict] = {}
+ROOF_RESULTS_CACHE_MTIME: float = 0.0
+BUILDINGS_3D_CACHE: dict[str, dict] = {}
+BUILDINGS_3D_CACHE_MTIME: float = 0.0
+ROOF_AUDIT_CACHE: dict[str, list[dict]] = {}
+ROOF_AUDIT_CACHE_MTIME: float = 0.0
+ROOF_INDEX_CACHE: list[dict] | None = None
+ROOF_INDEX_CACHE_KEY: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+
+def _leaves_of(proposal_id: str, children_by_parent: dict[str, list[str]]) -> list[str]:
+    kids = children_by_parent.get(proposal_id)
+    if not kids:
+        return [proposal_id]
+    out: list[str] = []
+    for k in kids:
+        out.extend(_leaves_of(k, children_by_parent))
+    return out
+
+
+def _ensure_v3_cache() -> None:
+    """Refresh V3_CACHE from disk when the results file has changed."""
+    global V3_CACHE, V3_CACHE_MTIME
+    if not V3_RESULTS_PATH.exists():
+        return
+    try:
+        mtime = V3_RESULTS_PATH.stat().st_mtime
+        if mtime != V3_CACHE_MTIME or not V3_CACHE:
+            with open(V3_RESULTS_PATH) as handle:
+                data = json.load(handle)
+            V3_CACHE = {
+                entry.get("building_uuid"): entry
+                for entry in data
+                if entry.get("building_uuid")
+            }
+            V3_CACHE_MTIME = mtime
+    except Exception:
+        return
+
+
+def _ensure_v3_scores() -> None:
+    """Refresh V3_SCORES from the scored mirror JSON when it has changed."""
+    global V3_SCORES, V3_SCORES_MTIME
+    if not V3_SCORED_PATH.exists():
+        V3_SCORES = {}
+        V3_SCORES_MTIME = 0.0
+        return
+    try:
+        mtime = V3_SCORED_PATH.stat().st_mtime
+        if mtime == V3_SCORES_MTIME and V3_SCORES:
+            return
+        scores: dict[str, dict] = {}
+        import ijson  # local import; only needed when a scored file is present
+
+        with V3_SCORED_PATH.open("rb") as handle:
+            for b in ijson.items(handle, "item", use_float=True):
+                for seg in b.get("merged_roof_segments") or []:
+                    sid = seg.get("id")
+                    if not isinstance(sid, str):
+                        continue
+                    scores[sid] = {
+                        "score": seg.get("score"),
+                        "autonomy_label": seg.get("autonomy_label"),
+                        "rule_fires": bool(seg.get("rule_fires")),
+                    }
+        V3_SCORES = scores
+        V3_SCORES_MTIME = mtime
+    except Exception:
+        # If scoring file is corrupt or mid-write, fall back to no scores.
+        V3_SCORES = {}
+        V3_SCORES_MTIME = 0.0
+
+
+def _plane_y_at(x: float, z: float, plane: tuple[float, float, float, float]) -> float:
+    a, b, c, d = plane
+    if abs(b) < 1e-6:
+        return 0.0
+    return -(a * x + c * z + d) / b
+
+
+def _split_proposal_polygon(
+    corners_xyz: list[list[float]],
+    plane: tuple[float, float, float, float],
+    p1_xz: tuple[float, float],
+    p2_xz: tuple[float, float],
+) -> list[tuple[list[list[float]], tuple[float, float]]]:
+    """Split the XZ footprint of a proposal polygon by an infinite line through
+    p1/p2, then lift both halves back onto the plane.
+
+    Returns a list of (corners_xyz, centroid_xz) tuples, ordered by signed
+    distance from the split line (left half first, right half second).
+    Raises ValueError if the split doesn't produce exactly two polygons.
+    """
+    import math
+
+    if len(corners_xyz) < 3:
+        raise ValueError("parent polygon has fewer than 3 corners")
+    xz_ring = [(float(p[0]), float(p[2])) for p in corners_xyz]
+    poly = Polygon(xz_ring)
+    if not poly.is_valid:
+        poly = make_valid(poly)
+        if poly.geom_type == "MultiPolygon":
+            poly = max(poly.geoms, key=lambda g: g.area)
+    if poly.is_empty or poly.area <= 0:
+        raise ValueError("parent polygon is empty or zero-area")
+
+    dx, dz = p2_xz[0] - p1_xz[0], p2_xz[1] - p1_xz[1]
+    length = math.hypot(dx, dz)
+    if length < 1e-6:
+        raise ValueError("split points coincide")
+    ux, uz = dx / length, dz / length
+    # Extend well beyond polygon bbox so shapely.split bisects reliably.
+    minx, minz, maxx, maxz = poly.bounds
+    diag = math.hypot(maxx - minx, maxz - minz)
+    L = max(diag * 10.0, 100.0)
+    ext_a = (p1_xz[0] - ux * L, p1_xz[1] - uz * L)
+    ext_b = (p2_xz[0] + ux * L, p2_xz[1] + uz * L)
+    line = LineString([ext_a, ext_b])
+
+    try:
+        result = shapely_split(poly, line)
+    except Exception as exc:
+        raise ValueError(f"shapely.split failed: {exc}") from exc
+
+    pieces = [g for g in getattr(result, "geoms", [result]) if g.area > 1e-9]
+    if len(pieces) < 2:
+        raise ValueError("split line does not cross the polygon")
+
+    # Left normal: 90° CCW from line direction.
+    nx, nz = -uz, ux
+
+    def side(poly2: Polygon) -> float:
+        cx, cz = poly2.centroid.x, poly2.centroid.y
+        return (cx - p1_xz[0]) * nx + (cz - p1_xz[1]) * nz
+
+    if len(pieces) > 2:
+        # Merge all pieces with side>0 into left, <=0 into right.
+        left = [pp for pp in pieces if side(pp) > 0]
+        right = [pp for pp in pieces if side(pp) <= 0]
+        if not left or not right:
+            raise ValueError("split produced degenerate halves")
+        left_poly = unary_union(left)
+        right_poly = unary_union(right)
+        if left_poly.geom_type == "MultiPolygon":
+            left_poly = max(left_poly.geoms, key=lambda g: g.area)
+        if right_poly.geom_type == "MultiPolygon":
+            right_poly = max(right_poly.geoms, key=lambda g: g.area)
+        pieces_ordered = [left_poly, right_poly]
+    else:
+        pieces_ordered = sorted(pieces, key=side, reverse=True)
+
+    out: list[tuple[list[list[float]], tuple[float, float]]] = []
+    for piece in pieces_ordered:
+        coords = list(piece.exterior.coords)
+        if len(coords) >= 2 and coords[0] == coords[-1]:
+            coords = coords[:-1]
+        corners = [
+            [float(x), _plane_y_at(float(x), float(z), plane), float(z)]
+            for x, z in coords
+        ]
+        out.append((corners, (float(piece.centroid.x), float(piece.centroid.y))))
+    return out
 
 
 def _room_key(room_index: int) -> str:
@@ -713,6 +971,7 @@ def _renderable_surface_from_occupied_face(
     *,
     part_id: str,
     openings: list[dict[str, Any]],
+    atoms_covering_ceiling: set[str] | None = None,
 ) -> dict[str, Any] | None:
     corners = _face_corners(face)
     if len(corners) < 3:
@@ -726,6 +985,18 @@ def _renderable_surface_from_occupied_face(
         category = "base_room_floor"
     elif boundary_class == "ceiling":
         if exact_source_kind == "synthetic_top_boundary_atom":
+            return None
+        # Avoid double-rendering: when the cell's top boundary atom already
+        # emits a committed ceiling surface (sloped/flat/transition cap), the
+        # flat horizontal base_room_ceiling duplicates — and often floats
+        # above — the atom's actual slope or cap. Suppress it here so the
+        # atom's poly is the sole ceiling for that cell.
+        top_atom_id = cell.get("top_boundary_atom_id")
+        if (
+            atoms_covering_ceiling is not None
+            and isinstance(top_atom_id, str)
+            and top_atom_id in atoms_covering_ceiling
+        ):
             return None
         category = "base_room_ceiling"
     elif boundary_class == "exterior_wall":
@@ -797,6 +1068,7 @@ def _renderable_surfaces_from_occupied_room_cells(
     building: dict[str, Any] | None,
     room_indices: set[int],
     part_id: str,
+    atoms_covering_ceiling: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if occupied_room_cell_complex is None:
         return [], []
@@ -824,6 +1096,7 @@ def _renderable_surfaces_from_occupied_room_cells(
                 cell,
                 part_id=part_id,
                 openings=fenestration_by_room.get(room_index, []),
+                atoms_covering_ceiling=atoms_covering_ceiling,
             )
             if surface is not None:
                 renderable.append(surface)
@@ -920,7 +1193,11 @@ def _renderable_base_room_surfaces(
     return renderable
 
 
-def _renderable_category_for_atom(atom: dict[str, Any]) -> str | None:
+def _renderable_category_for_atom(
+    atom: dict[str, Any],
+    *,
+    rooms_with_per_room_unresolved: set[str] | None = None,
+) -> str | None:
     role = str(atom.get("role") or "")
     if role == "sloped_ceiling":
         return "room_ceiling_sloped"
@@ -930,20 +1207,45 @@ def _renderable_category_for_atom(atom: dict[str, Any]) -> str | None:
         return "attic_floor"
     if role in {"flat_transition_cap", "flat_transition_cap_inferred"}:
         return "room_ceiling_flat"
+    # Candidate atoms are evidence-supported but not strong enough to commit
+    # as attic/transition caps in the Full model. Render them as
+    # low-confidence unresolved-region overlays rather than leaving silent
+    # holes where the Full model declines to commit. The user preference is
+    # "low-confidence markers rather than silent holes" — this realises it
+    # at per-atom granularity so regions adjacent to committed attic
+    # surfaces (e.g. 5c557e06 room 0, where 2 exact-cell attic atoms sit
+    # next to 1 demoted P1a atom) do not leave visible gaps. Suppress when
+    # the room already emits a whole-room unresolved fallback so we don't
+    # paint overlapping overlays.
+    if role in {"attic_floor_candidate", "flat_transition_cap_candidate"}:
+        room_id = str(atom.get("room_id") or "")
+        if rooms_with_per_room_unresolved and room_id in rooms_with_per_room_unresolved:
+            return None
+        return "unresolved_region"
     return None
 
 
-def _renderable_surface_from_atom(atom: dict[str, Any]) -> dict[str, Any] | None:
-    category = _renderable_category_for_atom(atom)
+def _renderable_surface_from_atom(
+    atom: dict[str, Any],
+    *,
+    rooms_with_per_room_unresolved: set[str] | None = None,
+) -> dict[str, Any] | None:
+    category = _renderable_category_for_atom(
+        atom,
+        rooms_with_per_room_unresolved=rooms_with_per_room_unresolved,
+    )
     corners = atom.get("poly") or []
     if category is None or not isinstance(corners, list) or len(corners) < 3:
         return None
+    raw_holes = atom.get("holes") or []
+    holes = [ring for ring in raw_holes if isinstance(ring, list) and len(ring) >= 3]
     return {
         "id": f"renderable:{category}:{atom.get('id')}",
         "category": category,
         "source_kind": "semantic_atom",
         "source_id": atom.get("id"),
         "corners": corners,
+        "holes": holes,
         "part_id": atom.get("effective_part_id") or UNASSIGNED_PART_ID,
         "room_id": atom.get("room_id"),
         "room_index": atom.get("room_index"),
@@ -1086,6 +1388,210 @@ def _fallback_unresolved_region_from_roof_surface(
         "fallback_source_kind": "roof_surface_fallback",
         "roof_hypothesis_id": surface.get("roof_hypothesis_id"),
     }
+
+
+# Minimum residual area (m^2) for emitting a surface-level unresolved fallback.
+# Below this, slivers along atom edges are suppressed as numerical noise rather
+# than honest "uncovered" evidence.
+ROOF_SURFACE_FALLBACK_MIN_AREA_M2 = 0.25
+
+
+def _atoms_covering_roof_surface(
+    surface: dict[str, Any],
+    atoms: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return atoms that share the surface's roof hypothesis (primary or sloped)."""
+    hypothesis_id = str(surface.get("roof_hypothesis_id") or "")
+    if not hypothesis_id:
+        return []
+    surface_kind = str(surface.get("surface_kind") or surface.get("kind") or "")
+    matches: list[dict[str, Any]] = []
+    for atom in atoms:
+        if not isinstance(atom, dict):
+            continue
+        atom_roof_id = str(atom.get("roof_hypothesis_id") or "")
+        atom_sloped_id = str(atom.get("sloped_hypothesis_id") or "")
+        if atom_roof_id == hypothesis_id:
+            matches.append(atom)
+            continue
+        # Oblique surface subtraction: flat atoms beneath that reference the same
+        # sloped hypothesis (attic_floor / flat_transition_cap) cover the oblique
+        # footprint from below, so they are valid subtraction sources.
+        if surface_kind == "oblique" and atom_sloped_id == hypothesis_id:
+            matches.append(atom)
+    return matches
+
+
+def _lift_xz_polygon_to_surface_plane(
+    polygon_xz: Polygon,
+    surface_corners: list[list[float]],
+) -> list[list[float]] | None:
+    if polygon_xz.is_empty or polygon_xz.area < ROOF_SURFACE_FALLBACK_MIN_AREA_M2:
+        return None
+    exterior = list(polygon_xz.exterior.coords)
+    if exterior and exterior[-1] == exterior[0]:
+        exterior = exterior[:-1]
+    if len(exterior) < 3:
+        return None
+    points = [
+        (float(c[0]), float(c[1]), float(c[2]))
+        for c in surface_corners
+        if isinstance(c, (list, tuple)) and len(c) >= 3
+    ]
+    ys = [p[1] for p in points]
+    if not ys:
+        return [[float(x), 0.0, float(z)] for (x, z) in exterior]
+    if max(ys) - min(ys) < 1e-4:
+        y_const = sum(ys) / len(ys)
+        return [[float(x), float(y_const), float(z)] for (x, z) in exterior]
+    try:
+        import numpy as np
+        a_mat = np.array([[p[0], p[2], 1.0] for p in points], dtype=float)
+        b_vec = np.array(ys, dtype=float)
+        coeffs, *_ = np.linalg.lstsq(a_mat, b_vec, rcond=None)
+        a, b, c = float(coeffs[0]), float(coeffs[1]), float(coeffs[2])
+        return [[float(x), a * float(x) + b * float(z) + c, float(z)] for (x, z) in exterior]
+    except Exception:
+        y_mean = sum(ys) / len(ys)
+        return [[float(x), float(y_mean), float(z)] for (x, z) in exterior]
+
+
+def _split_polygon_holes(geom: Polygon, min_area: float) -> list[Polygon]:
+    """Decompose a polygon (possibly with interior holes) into simple hole-free
+    polygons by cutting vertical lines through each hole's centroid.
+
+    Viewer meshes are simple ring polygons; dropping a holed polygon's interior
+    ring silently back-fills covered regions, so we split instead.
+    """
+    if geom.geom_type != "Polygon" or geom.area < min_area:
+        return []
+    if not list(geom.interiors):
+        return [geom]
+    minx, miny, maxx, maxy = geom.bounds
+    cut_xs = sorted({round(interior.centroid.x, 6) for interior in geom.interiors})
+    lines = [LineString([(x, miny - 1.0), (x, maxy + 1.0)]) for x in cut_xs]
+    pieces: list[Polygon] = []
+    try:
+        splitter = MultiLineString(lines) if len(lines) > 1 else lines[0]
+        split_result = shapely_split(geom, splitter)
+        for piece in getattr(split_result, "geoms", [split_result]):
+            if piece.geom_type != "Polygon" or piece.area < min_area:
+                continue
+            if list(piece.interiors):
+                pieces.extend(_split_polygon_holes(piece, min_area))
+            else:
+                pieces.append(piece)
+    except Exception:
+        pieces = []
+    if pieces:
+        return pieces
+    try:
+        tris = shapely.constrained_delaunay_triangles(geom)
+        return [
+            t for t in getattr(tris, "geoms", [])
+            if t.geom_type == "Polygon" and t.area >= min_area
+        ]
+    except Exception:
+        return []
+
+
+def _residual_fallback_regions_from_roof_surface(
+    surface: dict[str, Any],
+    *,
+    part_id: str,
+    surface_id: str,
+    covering_atoms: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Emit unresolved_region fallbacks only for the parts of ``surface`` not
+    already covered by atom-level committed geometry.
+
+    If no atoms overlap, emits the full surface as a single fallback (existing
+    behaviour). If atoms fully cover the surface, returns an empty list. If
+    atoms partially cover, emits one fallback per residual polygon so the
+    viewer paints orange only on genuinely uncovered regions.
+    """
+    surface_corners_raw = surface.get("corners") or []
+    if len(surface_corners_raw) < 3:
+        return []
+    surface_corners = [
+        [float(c[0]), float(c[1]), float(c[2])]
+        for c in surface_corners_raw
+        if isinstance(c, (list, tuple)) and len(c) >= 3
+    ]
+    if len(surface_corners) < 3:
+        return []
+
+    single_fallback = _fallback_unresolved_region_from_roof_surface(
+        surface,
+        part_id=part_id,
+        surface_id=surface_id,
+    )
+    if single_fallback is None:
+        return []
+    if not covering_atoms:
+        return [single_fallback]
+
+    try:
+        surface_poly_xz = Polygon([(c[0], c[2]) for c in surface_corners])
+    except Exception:
+        return [single_fallback]
+    surface_poly_xz = make_valid(surface_poly_xz)
+    if surface_poly_xz.is_empty:
+        return []
+
+    covering_polys: list[Polygon] = []
+    for atom in covering_atoms:
+        poly_coords = atom.get("poly") or []
+        if len(poly_coords) < 3:
+            continue
+        try:
+            poly = Polygon([(float(c[0]), float(c[2])) for c in poly_coords if len(c) >= 3])
+        except Exception:
+            continue
+        cleaned = make_valid(poly.buffer(0.001))
+        if not cleaned.is_empty:
+            covering_polys.append(cleaned)
+    if not covering_polys:
+        return [single_fallback]
+
+    covered = unary_union(covering_polys)
+    try:
+        residual = surface_poly_xz.difference(covered)
+    except Exception:
+        return [single_fallback]
+    if residual.is_empty:
+        return []
+
+    room_index = surface.get("room_index")
+    room_id = _room_key(room_index) if isinstance(room_index, int) else None
+    story = surface.get("story", surface.get("dominant_story"))
+    hypothesis_id = surface.get("roof_hypothesis_id")
+
+    raw_geoms = [residual] if residual.geom_type == "Polygon" else list(getattr(residual, "geoms", []))
+    simple_pieces: list[Polygon] = []
+    for geom in raw_geoms:
+        simple_pieces.extend(_split_polygon_holes(geom, ROOF_SURFACE_FALLBACK_MIN_AREA_M2))
+    regions: list[dict[str, Any]] = []
+    for index, geom in enumerate(simple_pieces):
+        lifted = _lift_xz_polygon_to_surface_plane(geom, surface_corners)
+        if lifted is None:
+            continue
+        polygon_xz = [[_round6(p[0]), _round6(p[2])] for p in lifted]
+        regions.append(
+            {
+                "id": f"unresolved-fallback-roof:{surface_id}:residual:{index}",
+                "room_id": room_id,
+                "room_index": room_index,
+                "story": story,
+                "effective_part_ids": [part_id],
+                "polygon": lifted,
+                "polygon_xz": polygon_xz,
+                "roof_evidence_score": 0,
+                "fallback_source_kind": "roof_surface_fallback",
+                "roof_hypothesis_id": hypothesis_id,
+            }
+        )
+    return regions
 
 
 def _room_summary_for_room_index(summary: dict[str, Any], room_index: int | None) -> dict[str, Any]:
@@ -1236,6 +1742,7 @@ def _roof_atom_patch_payload(
         return []
     renderable: list[dict[str, Any]] = []
     emitted_ids: set[str] = set()
+    room_summaries = summary.get("room_summaries") or {}
     for atom in (summary.get("semantic_atoms") or []):
         if not isinstance(atom, dict):
             continue
@@ -1243,6 +1750,8 @@ def _roof_atom_patch_payload(
             continue
         if str(atom.get("roof_hypothesis_id") or "") != roof_hypothesis_id:
             continue
+        room_index = atom.get("room_index")
+        room_summary = room_summaries.get(str(atom.get("room_id") or "")) or {}
         if surface_kind == "flat":
             if str(atom.get("flat_role") or "") == "ambiguous_flat_over_sloped_part":
                 continue
@@ -1253,7 +1762,23 @@ def _roof_atom_patch_payload(
                 continue
             if str(atom.get("flat_role") or "") != "roof_flat":
                 continue
-        room_index = atom.get("room_index")
+            if bool(room_summary.get("mixed")):
+                continue
+            if bool(room_summary.get("has_oblique_atom")):
+                continue
+            if bool(room_summary.get("covered_by_sloped_roof")) or bool(room_summary.get("partially_covered_by_sloped_roof")):
+                continue
+            if bool(room_summary.get("strong_perimeter_sloped")) or bool(room_summary.get("strong_knee_wall_signal")):
+                continue
+        else:
+            if str(atom.get("role") or "") != "sloped_ceiling":
+                continue
+            if room_summary:
+                if str(atom.get("sloped_coverage_state") or "") != "confirmed":
+                    continue
+                clearance = atom.get("sloped_vertical_clearance_m")
+                if isinstance(clearance, (int, float)) and float(clearance) < -0.05:
+                    continue
         atom_part_id = str(atom.get("effective_part_id") or UNASSIGNED_PART_ID)
         if not include_all_rooms:
             if atom_part_id != part_id and (not isinstance(room_index, int) or room_index not in room_indices):
@@ -1295,6 +1820,16 @@ def _room_flat_roof_atom_patch_payload(
 ) -> list[dict[str, Any]]:
     renderable: list[dict[str, Any]] = []
     local_emitted_ids = emitted_ids if emitted_ids is not None else set()
+    room_summaries = summary.get("room_summaries") or {}
+    room_summary = room_summaries.get(_room_key(room_index)) or {}
+    if bool(room_summary.get("mixed")):
+        return renderable
+    if bool(room_summary.get("has_oblique_atom")):
+        return renderable
+    if bool(room_summary.get("covered_by_sloped_roof")) or bool(room_summary.get("partially_covered_by_sloped_roof")):
+        return renderable
+    if bool(room_summary.get("strong_perimeter_sloped")) or bool(room_summary.get("strong_knee_wall_signal")):
+        return renderable
     for atom in (summary.get("semantic_atoms") or []):
         if not isinstance(atom, dict):
             continue
@@ -1344,10 +1879,12 @@ def _roof_surface_fallback_payload(
     exact_roof_room_indices: set[int],
     exact_roof_hypothesis_ids: set[str],
     include_all_rooms: bool,
+    atoms_for_subtraction: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int, int]:
     if roof is None:
         return [], [], 0, 0
     roof_surfaces = roof.get("roof_surfaces") or {}
+    atoms_for_subtraction = atoms_for_subtraction or []
     renderable: list[dict[str, Any]] = []
     unresolved_regions: list[dict[str, Any]] = []
     exact_flat_surface_count = 0
@@ -1401,15 +1938,22 @@ def _roof_surface_fallback_payload(
                     or surface.get("roof_hypothesis_id")
                     or f"{surface_kind}:{index}"
                 )
-                unresolved = _fallback_unresolved_region_from_roof_surface(
-                    surface,
-                    part_id=part_id,
-                    surface_id=surface_id,
+                covering_atoms = _atoms_covering_roof_surface(surface, atoms_for_subtraction)
+                unresolved_regions.extend(
+                    _residual_fallback_regions_from_roof_surface(
+                        surface,
+                        part_id=part_id,
+                        surface_id=surface_id,
+                        covering_atoms=covering_atoms,
+                    )
                 )
-                if unresolved is not None:
-                    unresolved_regions.append(unresolved)
                 continue
             if not isinstance(room_index, int):
+                # Top-kind roomless flats are whole-building roof decks that
+                # duplicate the per-room layer (intermediate flats, oblique
+                # surfaces, ceiling atoms). Drop them to avoid double coverage.
+                if str(surface.get("kind") or "") == "top":
+                    continue
                 atom_patches = _roof_atom_patch_payload(
                     summary=summary,
                     part_id=part_id,
@@ -1429,13 +1973,15 @@ def _roof_surface_fallback_payload(
                     or surface.get("roof_hypothesis_id")
                     or f"{surface_kind}:{index}"
                 )
-                unresolved = _fallback_unresolved_region_from_roof_surface(
-                    surface,
-                    part_id=part_id,
-                    surface_id=surface_id,
+                covering_atoms = _atoms_covering_roof_surface(surface, atoms_for_subtraction)
+                unresolved_regions.extend(
+                    _residual_fallback_regions_from_roof_surface(
+                        surface,
+                        part_id=part_id,
+                        surface_id=surface_id,
+                        covering_atoms=covering_atoms,
+                    )
                 )
-                if unresolved is not None:
-                    unresolved_regions.append(unresolved)
                 continue
             room_atom_patches = _room_flat_roof_atom_patch_payload(
                 summary=summary,
@@ -1471,13 +2017,15 @@ def _roof_surface_fallback_payload(
                 continue
             append_unique_surfaces([fallback_surface])
             if emit_unresolved:
-                unresolved = _fallback_unresolved_region_from_roof_surface(
-                    surface,
-                    part_id=part_id,
-                    surface_id=surface_id,
+                covering_atoms = _atoms_covering_roof_surface(surface, atoms_for_subtraction)
+                unresolved_regions.extend(
+                    _residual_fallback_regions_from_roof_surface(
+                        surface,
+                        part_id=part_id,
+                        surface_id=surface_id,
+                        covering_atoms=covering_atoms,
+                    )
                 )
-                if unresolved is not None:
-                    unresolved_regions.append(unresolved)
     return renderable, unresolved_regions, exact_flat_surface_count, coverage_patch_surface_count
 
 
@@ -1564,6 +2112,58 @@ def _dedupe_renderable_surfaces(surfaces: list[dict[str, Any]]) -> list[dict[str
             emitted_ids.add(surface_id)
         deduped.append(surface)
     return deduped
+
+
+def _resolve_full_model_surface_overlaps(
+    surfaces: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Resolve competing ceiling interpretations for committed full-model output.
+
+    Full model should show the selected geometry, not overlapping diagnostic
+    alternatives. Keep the strongest ceiling interpretation per room + height
+    band and drop lower-priority coplanar alternatives.
+    """
+    ceiling_priority = {
+        "room_ceiling_sloped": 5,
+        "room_ceiling_flat": 4,
+        "attic_floor": 3,
+        "base_room_ceiling": 2,
+        "fallback_room_ceiling": 1,
+    }
+    passthrough: list[dict[str, Any]] = []
+    grouped: dict[tuple[int, str], list[dict[str, Any]]] = defaultdict(list)
+
+    for surface in surfaces:
+        category = str(surface.get("category") or "")
+        room_index = surface.get("room_index")
+        corners = surface.get("corners") or []
+        if (
+            category not in ceiling_priority
+            or not isinstance(room_index, int)
+            or not isinstance(corners, list)
+            or len(corners) < 3
+        ):
+            passthrough.append(surface)
+            continue
+        y_values = sorted(
+            {
+                _round6(corner[1])
+                for corner in corners
+                if isinstance(corner, (list, tuple)) and len(corner) >= 3
+            }
+        )
+        y_key = "|".join(f"{value:.3f}" for value in y_values)
+        grouped[(room_index, y_key)].append(surface)
+
+    resolved: list[dict[str, Any]] = list(passthrough)
+    for group in grouped.values():
+        best = max(ceiling_priority.get(str(surface.get("category") or ""), 0) for surface in group)
+        resolved.extend(
+            surface
+            for surface in group
+            if ceiling_priority.get(str(surface.get("category") or ""), 0) == best
+        )
+    return resolved
 
 
 def _topology_cell_polygon(cell: dict[str, Any]) -> Polygon | None:
@@ -2107,10 +2707,18 @@ def _build_ontology_summary(
             }
         )
 
+    rooms_with_per_room_unresolved = {
+        str(region.get("room_id"))
+        for region in unresolved_regions
+        if region.get("room_id")
+    }
     renderable_surfaces = [
         surface
         for surface in (
-            _renderable_surface_from_atom(atom)
+            _renderable_surface_from_atom(
+                atom,
+                rooms_with_per_room_unresolved=rooms_with_per_room_unresolved,
+            )
             for atom in semantic_atoms
         )
         if surface is not None
@@ -2155,7 +2763,7 @@ def _build_ontology_summary(
                 [cell for cell in (topology_cell_complex.get("cells") or []) if cell.get("kind") == "room"]
             ),
             "roof_exact_cell_count": len(roof_cell_complex.get("cells") or []),
-            "occupied_room_cell_count": len(((roof.get("occupied_room_cell_complex") or {}).get("cells") or [])),
+            "occupied_room_cell_count": len((roof.get("occupied_room_cell_complex") or {}).get("cells") or []),
             "knee_wall_count": len(roof_cell_complex.get("knee_walls") or []),
         },
     }
@@ -2310,11 +2918,25 @@ def _build_ontology_part_payloads(
             )
             if surface is not None
         )
+        ceiling_atom_roles = {
+            "sloped_ceiling",
+            "flat_ceiling",
+            "flat_transition_cap",
+            "flat_transition_cap_inferred",
+        }
+        atoms_covering_ceiling = {
+            str(atom.get("id"))
+            for atom in (summary.get("semantic_atoms") or [])
+            if isinstance(atom, dict)
+            and atom.get("id")
+            and str(atom.get("role") or "") in ceiling_atom_roles
+        }
         occupied_renderable_surfaces, occupied_unresolved_regions = _renderable_surfaces_from_occupied_room_cells(
             occupied_room_cell_complex=occupied_room_cell_complex,
             building=building,
             room_indices=room_indices,
             part_id=part_id,
+            atoms_covering_ceiling=atoms_covering_ceiling,
         )
         if occupied_renderable_surfaces:
             renderable_surfaces.extend(occupied_renderable_surfaces)
@@ -2329,16 +2951,25 @@ def _build_ontology_part_payloads(
                 )
             )
         unresolved_regions.extend(occupied_unresolved_regions)
+        rooms_with_per_room_unresolved = {
+            str(region.get("room_id"))
+            for region in unresolved_regions
+            if region.get("room_id")
+        }
+        part_semantic_atoms = _part_semantic_atoms(
+            summary=summary,
+            part_id=part_id,
+            room_indices=room_indices,
+            include_all_rooms=include_all_rooms,
+        )
         renderable_surfaces.extend(
             surface
             for surface in (
-                _renderable_surface_from_atom(atom)
-                for atom in _part_semantic_atoms(
-                    summary=summary,
-                    part_id=part_id,
-                    room_indices=room_indices,
-                    include_all_rooms=include_all_rooms,
+                _renderable_surface_from_atom(
+                    atom,
+                    rooms_with_per_room_unresolved=rooms_with_per_room_unresolved,
                 )
+                for atom in part_semantic_atoms
             )
             if surface is not None
         )
@@ -2355,6 +2986,7 @@ def _build_ontology_part_payloads(
             exact_roof_room_indices=exact_roof_room_indices,
             exact_roof_hypothesis_ids=exact_roof_hypothesis_ids,
             include_all_rooms=include_all_rooms,
+            atoms_for_subtraction=part_semantic_atoms,
         )
         renderable_surfaces.extend(fallback_roof_surfaces)
         unresolved_regions.extend(fallback_unresolved_regions)
@@ -2389,6 +3021,7 @@ def _build_ontology_part_payloads(
         ]
         renderable_surfaces.extend(unresolved_renderable_surfaces)
         renderable_surfaces = _dedupe_renderable_surfaces(renderable_surfaces)
+        renderable_surfaces = _resolve_full_model_surface_overlaps(renderable_surfaces)
         renderable_surface_counts = _surface_category_counts(renderable_surfaces)
         dormer_subset = _filter_part_dormers(dormers, room_indices)
         part_details[part_id] = {
@@ -2468,6 +3101,7 @@ def _build_ontology_cache_entry(uuid: str) -> dict[str, Any]:
     return {
         "summary": summary,
         "parts": parts,
+        "full_model": parts.get(FULL_BUILDING_PART_ID),
     }
 
 
@@ -2502,6 +3136,12 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             directory = str(ROOT_DIR)
         super().__init__(*args, directory=directory, **kwargs)
 
+    def end_headers(self):
+        parsed_path = urllib.parse.urlparse(self.path).path
+        if parsed_path == "/" or parsed_path.endswith((".html", ".js", ".css")):
+            self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/ortofoto":
@@ -2510,8 +3150,47 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/ontology-artifacts":
             self._handle_ontology_artifacts(parsed.query)
             return
+        if parsed.path == "/v3":
+            self._handle_v3(parsed.query)
+            return
+        if parsed.path == "/candidate-faces":
+            self._handle_candidate_faces(parsed.query)
+            return
+        if parsed.path == "/ridge-eave-scores":
+            self._handle_ridge_eave_scores(parsed.query)
+            return
+        if parsed.path == "/raw-ceiling-prototype":
+            self._handle_raw_ceiling_prototype()
+            return
+        if parsed.path == "/computed-overextend":
+            self._handle_computed_overextend()
+            return
+        if parsed.path == "/raw-disagreement":
+            self._handle_raw_disagreement()
+            return
+        if parsed.path == "/ceiling-replacement":
+            self._handle_ceiling_replacement()
+            return
+        if parsed.path == "/reconstruction":
+            self._handle_reconstruction(parsed.query)
+            return
         if parsed.path == "/alignment-calibration":
             self._handle_calibration_get()
+            return
+        if parsed.path == "/v3-roof-proposal-labels":
+            self._handle_roof_proposal_labels_get(parsed.query)
+            return
+        if parsed.path == "/v3-roof-proposal-splits":
+            self._handle_roof_proposal_splits_get(parsed.query)
+            return
+        if parsed.path == "/v3-roof-proposal-queue":
+            self._handle_roof_proposal_queue_get()
+            return
+        if parsed.path == "/roof-index":
+            self._handle_roof_index()
+            return
+        if parsed.path == "/roof-detail":
+            self._handle_roof_detail(parsed.query)
             return
 
         if parsed.path == "/":
@@ -2522,6 +3201,12 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/alignment-calibration":
             self._handle_calibration_post()
+            return
+        if parsed.path == "/v3-roof-proposal-label":
+            self._handle_roof_proposal_label_post()
+            return
+        if parsed.path == "/v3-roof-proposal-split":
+            self._handle_roof_proposal_split_post()
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
@@ -2653,6 +3338,1320 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(out)
 
+    def _read_roof_proposal_labels_for(self, building_uuid: str) -> dict:
+        """Return {proposal_id: label} with last-write-wins for the given building."""
+        if not ROOF_PROPOSAL_LABELS_PATH.exists():
+            return {}
+        latest: dict[str, str] = {}
+        with open(ROOF_PROPOSAL_LABELS_PATH) as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("building_uuid") != building_uuid:
+                    continue
+                pid = entry.get("proposal_id")
+                lbl = entry.get("label")
+                if isinstance(pid, str) and isinstance(lbl, str):
+                    latest[pid] = lbl
+        return latest
+
+    def _read_all_roof_proposal_labels(self) -> dict:
+        """Return {proposal_id: label} across all buildings with last-write-wins."""
+        if not ROOF_PROPOSAL_LABELS_PATH.exists():
+            return {}
+        latest: dict[str, str] = {}
+        with open(ROOF_PROPOSAL_LABELS_PATH) as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                pid = entry.get("proposal_id")
+                lbl = entry.get("label")
+                if isinstance(pid, str) and isinstance(lbl, str):
+                    latest[pid] = lbl
+        return latest
+
+    def _append_roof_proposal_label(self, entry: dict) -> None:
+        ROOF_PROPOSAL_LABELS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(ROOF_PROPOSAL_LABELS_PATH, "a") as handle:
+            handle.write(json.dumps(entry, sort_keys=True) + "\n")
+
+    def _handle_roof_proposal_labels_get(self, query: str) -> None:
+        params = urllib.parse.parse_qs(query)
+        building_uuid = (params.get("building_uuid") or [None])[0]
+        if not building_uuid:
+            self.send_error(HTTPStatus.BAD_REQUEST, "building_uuid query param required")
+            return
+        labels = self._read_roof_proposal_labels_for(building_uuid)
+        body = json.dumps(
+            {"building_uuid": building_uuid, "labels": labels}
+        ).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_roof_proposal_queue_get(self) -> None:
+        global V3_CACHE, V3_CACHE_MTIME
+        if not V3_RESULTS_PATH.exists():
+            body = json.dumps({"count": 0, "labeled": 0, "proposals": []}).encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        try:
+            mtime = V3_RESULTS_PATH.stat().st_mtime
+            if mtime != V3_CACHE_MTIME or not V3_CACHE:
+                with open(V3_RESULTS_PATH) as handle:
+                    data = json.load(handle)
+                V3_CACHE = {
+                    entry.get("building_uuid"): entry
+                    for entry in data
+                    if entry.get("building_uuid")
+                }
+                V3_CACHE_MTIME = mtime
+        except Exception as exc:
+            self.send_error(HTTPStatus.BAD_GATEWAY, f"v3 load failed: {exc}")
+            return
+        labels = self._read_all_roof_proposal_labels()
+        _ensure_v3_scores()
+        scored = bool(V3_SCORES)
+        out = []
+        labeled = 0
+        auto_accept_n = 0
+        auto_reject_n = 0
+        for uuid, bldg in V3_CACHE.items():
+            address = bldg.get("address", "")
+            # Only merged segments are renderable/labelable in the current
+            # viewer — raw `roof_proposals[]` are pre-merge and pre-room-split
+            # inputs, so iterating them in "Next unlabeled" jumps to items
+            # that aren't drawn on screen.
+            for seg in bldg.get("merged_roof_segments", []) or []:
+                sid = seg.get("id")
+                if not isinstance(sid, str):
+                    continue
+                lbl = labels.get(sid, "unlabeled")
+                if lbl != "unlabeled":
+                    labeled += 1
+                sc = V3_SCORES.get(sid) if scored else None
+                auto_label = sc.get("autonomy_label") if sc else None
+                if auto_label == "auto_accept":
+                    auto_accept_n += 1
+                elif auto_label == "auto_reject":
+                    auto_reject_n += 1
+                out.append({
+                    "building_uuid": uuid,
+                    "address": address,
+                    "proposal_id": sid,
+                    "kind": "v3-merged-roof-segment",
+                    "heuristic_label": seg.get("heuristic_label"),
+                    "label": lbl,
+                    "score": sc.get("score") if sc else None,
+                    "autonomy_label": auto_label,
+                    "rule_fires": sc.get("rule_fires") if sc else None,
+                })
+        # When a scored file is present, prioritize uncertain "review" items
+        # at the front of the queue so "Next unlabeled" surfaces the hardest
+        # calls first; keep everything else in stable order after that.
+        if scored:
+            def _rank(p: dict) -> tuple[int, float]:
+                al = p.get("autonomy_label")
+                # 0: review (uncertain first), 1: auto_accept, 2: auto_reject, 3: no score
+                bucket = {"review": 0, "auto_accept": 1, "auto_reject": 2}.get(al, 3)
+                s = p.get("score")
+                unc = abs((s if s is not None else 0.5) - 0.5)
+                return (bucket, unc)
+            out.sort(key=_rank)
+        body = json.dumps({
+            "count": len(out),
+            "labeled": labeled,
+            "scored": scored,
+            "auto_accept": auto_accept_n,
+            "auto_reject": auto_reject_n,
+            "proposals": out,
+        }).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_roof_proposal_label_post(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        raw = self.rfile.read(length) if length > 0 else b""
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except json.JSONDecodeError:
+            self.send_error(HTTPStatus.BAD_REQUEST, "Invalid JSON body")
+            return
+        if not isinstance(payload, dict):
+            self.send_error(HTTPStatus.BAD_REQUEST, "Body must be an object")
+            return
+
+        building_uuid = payload.get("building_uuid")
+        proposal_id = payload.get("proposal_id")
+        label = payload.get("label")
+        if (
+            not isinstance(building_uuid, str)
+            or not building_uuid
+            or not isinstance(proposal_id, str)
+            or not proposal_id
+            or label not in ("accepted", "rejected", "skipped")
+        ):
+            self.send_error(
+                HTTPStatus.BAD_REQUEST,
+                "building_uuid, proposal_id, label (accepted|rejected|skipped) required",
+            )
+            return
+
+        entry = {
+            "ts": datetime.datetime.now(datetime.UTC).isoformat(
+                timespec="seconds"
+            ),
+            "building_uuid": building_uuid,
+            "proposal_id": proposal_id,
+            "label": label,
+            "reasons": payload.get("reasons") or [],
+            "labeler": payload.get("labeler") or None,
+            "features_snapshot": payload.get("features_snapshot") or {},
+            "heuristic_label": payload.get("heuristic_label"),
+            # Merge-mode enrichment — everything a reverse-engineering pass
+            # needs to reconstruct the labeled entity (merged plane, all
+            # contributing raw proposals, per-member post-clip coords, the
+            # opposing planes that clipped the rain-hitting region, and the
+            # merge thresholds).
+            "merge_mode": bool(payload.get("merge_mode", False)),
+            "cluster_canonical_id": payload.get("cluster_canonical_id"),
+            "part_index": payload.get("part_index", 0),
+            "part_count": payload.get("part_count", 1),
+            "merged_plane": payload.get("merged_plane"),
+            "cluster_members": payload.get("cluster_members") or [],
+            "cluster_params": payload.get("cluster_params"),
+            "opposing_cluster_canonicals": payload.get("opposing_cluster_canonicals") or [],
+            "opposing_planes": payload.get("opposing_planes") or [],
+            "side_pieces": payload.get("side_pieces") or [],
+            # Merged-segment fields (v3-merged-roof-segment): the segment's
+            # final lifted 3D ring, the room/part/gap piece it was clipped to,
+            # the building-boundary ring used for the outer clip, and the raw
+            # proposal ids that contributed to this merged plane.
+            "kind": payload.get("kind"),
+            "member_proposal_ids": payload.get("member_proposal_ids") or [],
+            "room_boundary_refs": payload.get("room_boundary_refs") or [],
+            "building_boundary_xz": payload.get("building_boundary_xz"),
+            "segment_corners_xyz": payload.get("segment_corners_xyz"),
+        }
+        self._append_roof_proposal_label(entry)
+        out = json.dumps({"ok": True, "entry": entry}).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    def _read_all_roof_proposal_splits(self) -> list[dict]:
+        if not ROOF_PROPOSAL_SPLITS_PATH.exists():
+            return []
+        out: list[dict] = []
+        with open(ROOF_PROPOSAL_SPLITS_PATH) as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(entry, dict):
+                    out.append(entry)
+        return out
+
+    def _read_roof_proposal_splits_for(self, building_uuid: str) -> list[dict]:
+        return [
+            s for s in self._read_all_roof_proposal_splits()
+            if s.get("building_uuid") == building_uuid
+        ]
+
+    def _read_all_roof_proposal_children_map(self) -> dict[str, list[str]]:
+        """parent_id -> [child_id, ...] across all buildings (last-write-wins)."""
+        out: dict[str, list[str]] = {}
+        for rec in self._read_all_roof_proposal_splits():
+            pid = rec.get("parent_id")
+            children = rec.get("children") or []
+            if not isinstance(pid, str) or not isinstance(children, list):
+                continue
+            kids = [c.get("id") for c in children if isinstance(c, dict)]
+            kids = [k for k in kids if isinstance(k, str)]
+            if len(kids) >= 2:
+                out[pid] = kids
+        return out
+
+    def _append_roof_proposal_split(self, entry: dict) -> None:
+        ROOF_PROPOSAL_SPLITS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(ROOF_PROPOSAL_SPLITS_PATH, "a") as handle:
+            handle.write(json.dumps(entry, sort_keys=True) + "\n")
+
+    def _handle_roof_proposal_splits_get(self, query: str) -> None:
+        params = urllib.parse.parse_qs(query)
+        building_uuid = (params.get("building_uuid") or [None])[0]
+        if not building_uuid:
+            self.send_error(HTTPStatus.BAD_REQUEST, "building_uuid query param required")
+            return
+        records = self._read_roof_proposal_splits_for(building_uuid)
+        body = json.dumps({
+            "building_uuid": building_uuid,
+            "splits": records,
+        }).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _resolve_proposal_geometry(
+        self, building_uuid: str, proposal_id: str
+    ) -> tuple[list[list[float]], tuple[float, float, float, float], dict]:
+        """Return (corners, plane, original_proposal_dict) for a leaf proposal.
+
+        Walks splits.jsonl to find corners when proposal_id is a synthesized
+        child. The plane is always inherited from the original ancestor in
+        V3_CACHE.
+        """
+        _ensure_v3_cache()
+        bldg = V3_CACHE.get(building_uuid)
+        if not bldg:
+            raise LookupError(f"building {building_uuid} not in v3 cache")
+        # Inner part of the id; strip anything after first '#' to locate original.
+        parts = proposal_id.split("::", 2)
+        if len(parts) != 3:
+            raise ValueError(f"bad proposal id: {proposal_id}")
+        kind = parts[1]
+        inner = parts[2]
+        original_inner = inner.split("#", 1)[0]
+        original_id = f"{parts[0]}::{parts[1]}::{original_inner}"
+        # Merged segments live in `merged_roof_segments[]` with plane under
+        # `merged_plane`; raw proposals live in `roof_proposals[]` with plane
+        # under `plane`. Dispatch by the kind token in the id.
+        if kind == "v3-merged-roof-segment":
+            source_list = bldg.get("merged_roof_segments") or []
+            plane_key = "merged_plane"
+        else:
+            source_list = bldg.get("roof_proposals") or []
+            plane_key = "plane"
+        original = next(
+            (p for p in source_list if p.get("id") == original_id),
+            None,
+        )
+        if not original:
+            raise LookupError(f"original proposal {original_id} not found")
+        plane_raw = original.get(plane_key)
+        if not (isinstance(plane_raw, (list, tuple)) and len(plane_raw) == 4):
+            raise ValueError(f"original proposal has no 4-tuple {plane_key}")
+        plane = (float(plane_raw[0]), float(plane_raw[1]), float(plane_raw[2]), float(plane_raw[3]))
+        # Corners: either the original or a child from a split record.
+        if proposal_id == original_id:
+            corners = original.get("corners") or []
+        else:
+            corners = None
+            for rec in self._read_roof_proposal_splits_for(building_uuid):
+                for child in rec.get("children") or []:
+                    if child.get("id") == proposal_id:
+                        corners = child.get("corners") or []
+                        break
+                if corners is not None:
+                    break
+            if corners is None:
+                raise LookupError(f"corners for {proposal_id} not found in splits")
+        return list(corners), plane, original
+
+    def _handle_roof_proposal_split_post(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        raw = self.rfile.read(length) if length > 0 else b""
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except json.JSONDecodeError:
+            self.send_error(HTTPStatus.BAD_REQUEST, "Invalid JSON body")
+            return
+        if not isinstance(payload, dict):
+            self.send_error(HTTPStatus.BAD_REQUEST, "Body must be an object")
+            return
+        building_uuid = payload.get("building_uuid")
+        parent_id = payload.get("parent_proposal_id")
+        split_line = payload.get("split_line")
+        if (
+            not isinstance(building_uuid, str)
+            or not building_uuid
+            or not isinstance(parent_id, str)
+            or not parent_id
+            or not isinstance(split_line, list)
+            or len(split_line) != 2
+        ):
+            self.send_error(
+                HTTPStatus.BAD_REQUEST,
+                "building_uuid, parent_proposal_id, split_line [[x,z],[x,z]] required",
+            )
+            return
+        try:
+            p1 = (float(split_line[0][0]), float(split_line[0][1]))
+            p2 = (float(split_line[1][0]), float(split_line[1][1]))
+        except Exception:
+            self.send_error(HTTPStatus.BAD_REQUEST, "split_line must be [[x,z],[x,z]] numbers")
+            return
+
+        try:
+            parent_corners, plane, original = self._resolve_proposal_geometry(
+                building_uuid, parent_id
+            )
+        except Exception as exc:
+            self.send_error(HTTPStatus.NOT_FOUND, f"Proposal lookup failed: {exc}")
+            return
+
+        try:
+            children = _split_proposal_polygon(parent_corners, plane, p1, p2)
+        except ValueError as exc:
+            self.send_error(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+
+        parts = parent_id.split("::", 2)
+        base_inner = parts[2]
+        child_entries = []
+        for i, (corners, centroid_xz) in enumerate(children):
+            child_id = f"{parts[0]}::{parts[1]}::{base_inner}#{i}"
+            child_entries.append({
+                "id": child_id,
+                "corners": corners,
+                "centroid_xz": list(centroid_xz),
+            })
+
+        entry = {
+            "ts": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
+            "building_uuid": building_uuid,
+            "parent_id": parent_id,
+            "original_id": original.get("id"),
+            "split_line": [list(p1), list(p2)],
+            "children": child_entries,
+        }
+        self._append_roof_proposal_split(entry)
+
+        response = {
+            "ok": True,
+            "parent_id": parent_id,
+            "building_uuid": building_uuid,
+            "children": [
+                {
+                    "id": c["id"],
+                    "corners": c["corners"],
+                    "features": original.get("features") or {},
+                    "heuristic_label": original.get("heuristic_label"),
+                    "segment_index": original.get("segment_index"),
+                    "source_room_id": original.get("source_room_id"),
+                    "source_wall_id": original.get("source_wall_id"),
+                    "slab_room_id": original.get("slab_room_id"),
+                    "slab_id": original.get("slab_id"),
+                }
+                for c in child_entries
+            ],
+        }
+        body = json.dumps(response).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_v3(self, query: str):
+        global V3_CACHE, V3_CACHE_MTIME
+        params = urllib.parse.parse_qs(query)
+        uuid = (params.get("uuid") or [None])[0]
+        if not uuid:
+            self.send_error(HTTPStatus.BAD_REQUEST, "Missing uuid query param")
+            return
+        if not V3_RESULTS_PATH.exists():
+            self.send_error(
+                HTTPStatus.NOT_FOUND,
+                "reconcile_v3_results.json not found; run "
+                "`python -m reconcile_v3.cli --all` first.",
+            )
+            return
+        try:
+            mtime = V3_RESULTS_PATH.stat().st_mtime
+            if mtime != V3_CACHE_MTIME or not V3_CACHE:
+                with open(V3_RESULTS_PATH) as handle:
+                    data = json.load(handle)
+                V3_CACHE = {
+                    entry.get("building_uuid"): entry
+                    for entry in data
+                    if entry.get("building_uuid")
+                }
+                V3_CACHE_MTIME = mtime
+        except Exception as exc:
+            self.send_error(HTTPStatus.BAD_GATEWAY, f"v3 load failed: {exc}")
+            return
+        payload = V3_CACHE.get(uuid)
+        if payload is None:
+            self.send_error(
+                HTTPStatus.NOT_FOUND,
+                f"No v3 results for {uuid}; rerun the v3 CLI for this building.",
+            )
+            return
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_candidate_faces(self, query: str):
+        global CANDIDATE_FACES_CACHE, CANDIDATE_FACES_CACHE_MTIME
+        params = urllib.parse.parse_qs(query)
+        uuid = (params.get("uuid") or [None])[0]
+        if not uuid:
+            self.send_error(HTTPStatus.BAD_REQUEST, "Missing uuid query param")
+            return
+        if not CANDIDATE_FACES_PATH.exists():
+            self.send_error(
+                HTTPStatus.NOT_FOUND,
+                f"{CANDIDATE_FACES_PATH.name} not found; run "
+                "`python scripts/build_candidate_faces.py` first.",
+            )
+            return
+        try:
+            mtime = CANDIDATE_FACES_PATH.stat().st_mtime
+            if mtime != CANDIDATE_FACES_CACHE_MTIME or not CANDIDATE_FACES_CACHE:
+                with open(CANDIDATE_FACES_PATH) as handle:
+                    data = json.load(handle)
+                CANDIDATE_FACES_CACHE = {
+                    entry.get("building_uuid"): entry
+                    for entry in data
+                    if entry.get("building_uuid")
+                }
+                CANDIDATE_FACES_CACHE_MTIME = mtime
+        except Exception as exc:
+            self.send_error(
+                HTTPStatus.BAD_GATEWAY, f"candidate-faces load failed: {exc}"
+            )
+            return
+        payload = CANDIDATE_FACES_CACHE.get(uuid)
+        if payload is None:
+            self.send_error(
+                HTTPStatus.NOT_FOUND,
+                f"No candidate faces for {uuid}; rerun build_candidate_faces.py.",
+            )
+            return
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _ensure_roof_caches(self) -> tuple[bool, str]:
+        """Load the three roof-viewer source files on demand with mtime checks.
+
+        Returns (ok, message). On failure, the caller should emit the message.
+        """
+        global ROOF_RESULTS_CACHE, ROOF_RESULTS_CACHE_MTIME
+        global BUILDINGS_3D_CACHE, BUILDINGS_3D_CACHE_MTIME
+        global ROOF_AUDIT_CACHE, ROOF_AUDIT_CACHE_MTIME
+
+        if not ROOF_RESULTS_PATH.exists():
+            return False, f"{ROOF_RESULTS_PATH.name} not found"
+        if not BUILDINGS_3D_PATH.exists():
+            return False, f"{BUILDINGS_3D_PATH.name} not found"
+
+        try:
+            rm = ROOF_RESULTS_PATH.stat().st_mtime
+            if rm != ROOF_RESULTS_CACHE_MTIME or not ROOF_RESULTS_CACHE:
+                with open(ROOF_RESULTS_PATH) as handle:
+                    data = json.load(handle)
+                ROOF_RESULTS_CACHE = data if isinstance(data, dict) else {}
+                ROOF_RESULTS_CACHE_MTIME = rm
+        except Exception as exc:
+            return False, f"roof results load failed: {exc}"
+
+        try:
+            bm = BUILDINGS_3D_PATH.stat().st_mtime
+            if bm != BUILDINGS_3D_CACHE_MTIME or not BUILDINGS_3D_CACHE:
+                with open(BUILDINGS_3D_PATH) as handle:
+                    data = json.load(handle)
+                by_uuid: dict[str, dict] = {}
+                for b in data or []:
+                    uid = b.get("uuid")
+                    if uid:
+                        by_uuid[uid] = b
+                BUILDINGS_3D_CACHE = by_uuid
+                BUILDINGS_3D_CACHE_MTIME = bm
+        except Exception as exc:
+            return False, f"buildings_3d load failed: {exc}"
+
+        try:
+            if ROOF_AUDIT_PATH.exists():
+                am = ROOF_AUDIT_PATH.stat().st_mtime
+                if am != ROOF_AUDIT_CACHE_MTIME or not ROOF_AUDIT_CACHE:
+                    with open(ROOF_AUDIT_PATH) as handle:
+                        audit = json.load(handle)
+                    rows = audit.get("rows") or []
+                    by_uuid: dict[str, list[dict]] = {}
+                    for r in rows:
+                        uid = r.get("uuid")
+                        if uid:
+                            by_uuid.setdefault(uid, []).append(r)
+                    ROOF_AUDIT_CACHE = by_uuid
+                    ROOF_AUDIT_CACHE_MTIME = am
+            else:
+                ROOF_AUDIT_CACHE = {}
+                ROOF_AUDIT_CACHE_MTIME = 0.0
+        except Exception:
+            ROOF_AUDIT_CACHE = {}
+            ROOF_AUDIT_CACHE_MTIME = 0.0
+
+        return True, ""
+
+    def _roof_audit_for(self, uuid: str) -> dict[str, dict]:
+        """Return {element_id: audit_row} for a building."""
+        rows = ROOF_AUDIT_CACHE.get(uuid) or []
+        return {r.get("element_id"): r for r in rows if r.get("element_id")}
+
+    def _handle_roof_index(self) -> None:
+        """Return a compact list of buildings for the roof viewer sidebar.
+
+        Each entry: {uuid, address, n_oblique, n_flat, n_weak_committed,
+        n_weak_candidate, n_rooms, n_stories}. Sorted by weak committed desc.
+        """
+        global ROOF_INDEX_CACHE, ROOF_INDEX_CACHE_KEY
+        ok, msg = self._ensure_roof_caches()
+        if not ok:
+            self.send_error(HTTPStatus.NOT_FOUND, msg)
+            return
+
+        key = (
+            ROOF_RESULTS_CACHE_MTIME,
+            BUILDINGS_3D_CACHE_MTIME,
+            ROOF_AUDIT_CACHE_MTIME,
+        )
+        if ROOF_INDEX_CACHE is not None and key == ROOF_INDEX_CACHE_KEY:
+            index = ROOF_INDEX_CACHE
+        else:
+            index = []
+            for uuid, building in BUILDINGS_3D_CACHE.items():
+                roof = ROOF_RESULTS_CACHE.get(uuid)
+                if roof is None:
+                    continue
+                rs = roof.get("roof_surfaces") or {}
+                n_oblique = len(rs.get("oblique") or [])
+                n_flat = len(rs.get("flat") or [])
+                audit = self._roof_audit_for(uuid)
+                n_weak_committed = sum(
+                    1
+                    for r in audit.values()
+                    if r.get("group") == "committed_oblique"
+                    and r.get("classification") == "weak"
+                )
+                n_weak_candidate = sum(
+                    1
+                    for r in audit.values()
+                    if r.get("group") == "candidate_oblique"
+                    and r.get("classification") == "weak"
+                )
+                addr = building.get("address")
+                if isinstance(addr, dict):
+                    addr = " ".join(
+                        str(addr.get(k, ""))
+                        for k in ("street", "number", "postcode", "city")
+                        if addr.get(k)
+                    ).strip()
+                rooms = building.get("rooms") or []
+                stories = {int(r.get("story", 0)) for r in rooms}
+                index.append(
+                    {
+                        "uuid": uuid,
+                        "address": addr or "(no address)",
+                        "n_oblique": n_oblique,
+                        "n_flat": n_flat,
+                        "n_weak_committed": n_weak_committed,
+                        "n_weak_candidate": n_weak_candidate,
+                        "n_rooms": len(rooms),
+                        "n_stories": len(stories),
+                    }
+                )
+            index.sort(
+                key=lambda e: (
+                    -e["n_weak_committed"],
+                    -e["n_weak_candidate"],
+                    -e["n_oblique"],
+                )
+            )
+            ROOF_INDEX_CACHE = index
+            ROOF_INDEX_CACHE_KEY = key
+
+        body = json.dumps({"buildings": index}).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_roof_detail(self, query: str) -> None:
+        """Return per-building roof payload for viewer-roof.html.
+
+        Shape (compact):
+            {
+              uuid, address,
+              segments: [{id, a, b, incl, azimuth, story, room_idx,
+                          cluster_index, used}],
+              clusters: [{index, avgIncl, avgAzimuth, seg_count}],
+              candidates: [{index, corners, story, avg_incl, avg_azimuth,
+                            cluster_index, audit}],
+              committed: [{index, corners, story, avg_incl, avg_azimuth,
+                           audit}],
+              flat: [{index, corners, story, audit}],
+              raw_ceilings: [{story, room_index, plane_index, corners,
+                              exposed}],
+              floors: [{story, room_index, corners}],
+              audit_thresholds: {...},
+            }
+
+        ``audit`` is ``None`` for surfaces not scored (or when the audit file
+        is missing). A candidate's ``cluster_index`` is inferred by matching
+        its ``cl.refPt`` against ``valid_clusters[i].refPt``.
+        """
+        params = urllib.parse.parse_qs(query)
+        uuid = (params.get("uuid") or [None])[0]
+        if not uuid:
+            self.send_error(HTTPStatus.BAD_REQUEST, "Missing uuid query param")
+            return
+        ok, msg = self._ensure_roof_caches()
+        if not ok:
+            self.send_error(HTTPStatus.NOT_FOUND, msg)
+            return
+        building = BUILDINGS_3D_CACHE.get(uuid)
+        roof = ROOF_RESULTS_CACHE.get(uuid)
+        if building is None or roof is None:
+            self.send_error(
+                HTTPStatus.NOT_FOUND,
+                f"No roof data or buildings_3d entry for {uuid}",
+            )
+            return
+
+        audit_by_id = self._roof_audit_for(uuid)
+
+        def _slim_audit(row: dict | None) -> dict | None:
+            if not row:
+                return None
+            return {
+                "classification": row.get("classification"),
+                "match_count": row.get("match_count"),
+                "xz_coverage": row.get("xz_coverage"),
+                "median_dy": row.get("median_dy"),
+                "p95_abs_dy": row.get("p95_abs_dy"),
+                "normal_dot_median": row.get("normal_dot_median"),
+                "raw_y_min": row.get("raw_y_min"),
+                "raw_y_max": row.get("raw_y_max"),
+                "ceiling_raw_ids": row.get("ceiling_raw_ids"),
+                "element_id": row.get("element_id"),
+            }
+
+        valid_clusters = roof.get("valid_clusters") or []
+        cluster_key_to_index: dict[tuple, int] = {}
+        clusters_out: list[dict] = []
+        for idx, cl in enumerate(valid_clusters):
+            rp = cl.get("refPt") or {}
+            key = (
+                round(float(rp.get("x", 0.0)), 4),
+                round(float(rp.get("y", 0.0)), 4),
+                round(float(rp.get("z", 0.0)), 4),
+                round(float(cl.get("avgIncl", 0.0)), 3),
+                round(float(cl.get("avgAzimuth", 0.0)), 3),
+            )
+            cluster_key_to_index[key] = idx
+            clusters_out.append(
+                {
+                    "index": idx,
+                    "avgIncl": cl.get("avgIncl"),
+                    "avgAzimuth": cl.get("avgAzimuth"),
+                    "seg_count": len(cl.get("segs") or []),
+                    "refPt": cl.get("refPt"),
+                }
+            )
+
+        # Tag wall-top segments by the cluster they belong to.
+        seg_cluster_lookup: dict[tuple, int] = {}
+        for idx, cl in enumerate(valid_clusters):
+            for s in cl.get("segs") or []:
+                a = s.get("a") or []
+                b = s.get("b") or []
+                if len(a) < 3 or len(b) < 3:
+                    continue
+                k = (
+                    round(float(a[0]), 4),
+                    round(float(a[1]), 4),
+                    round(float(a[2]), 4),
+                    round(float(b[0]), 4),
+                    round(float(b[1]), 4),
+                    round(float(b[2]), 4),
+                )
+                seg_cluster_lookup[k] = idx
+
+        segments_out: list[dict] = []
+        for sidx, s in enumerate(roof.get("segments") or []):
+            a = s.get("a") or []
+            b = s.get("b") or []
+            if len(a) < 3 or len(b) < 3:
+                continue
+            k = (
+                round(float(a[0]), 4),
+                round(float(a[1]), 4),
+                round(float(a[2]), 4),
+                round(float(b[0]), 4),
+                round(float(b[1]), 4),
+                round(float(b[2]), 4),
+            )
+            ci = seg_cluster_lookup.get(k)
+            segments_out.append(
+                {
+                    "id": f"seg:{sidx}",
+                    "a": a,
+                    "b": b,
+                    "incl": s.get("incl"),
+                    "azimuth": s.get("azimuth"),
+                    "len": s.get("len"),
+                    "story": s.get("story"),
+                    "room_idx": s.get("room_idx"),
+                    "cluster_index": ci,
+                    "used": ci is not None,
+                }
+            )
+
+        ceiling = roof.get("ceiling") or {}
+        candidates_out: list[dict] = []
+        for idx, plane in enumerate(ceiling.get("planes") or []):
+            corners = self._candidate_corners_3d(plane)
+            cl = plane.get("cl") or {}
+            rp = cl.get("refPt") or {}
+            key = (
+                round(float(rp.get("x", 0.0)), 4),
+                round(float(rp.get("y", 0.0)), 4),
+                round(float(rp.get("z", 0.0)), 4),
+                round(float(cl.get("avgIncl", 0.0)), 3),
+                round(float(cl.get("avgAzimuth", 0.0)), 3),
+            )
+            cand_cluster = cluster_key_to_index.get(key)
+            audit_id = f"{uuid}::ceiling-oblique::ceiling-oblique:{idx}"
+            candidates_out.append(
+                {
+                    "index": idx,
+                    "corners": corners,
+                    "story": plane.get("dominantStory"),
+                    "avg_incl": cl.get("avgIncl"),
+                    "avg_azimuth": cl.get("avgAzimuth"),
+                    "cluster_index": cand_cluster,
+                    "room_indices": plane.get("room_indices"),
+                    "audit_id": audit_id,
+                    "audit": _slim_audit(audit_by_id.get(audit_id)),
+                }
+            )
+
+        roof_surfaces = roof.get("roof_surfaces") or {}
+        committed_out: list[dict] = []
+        for idx, ob in enumerate(roof_surfaces.get("oblique") or []):
+            corners = ob.get("corners") or []
+            cl = ob.get("cluster") or {}
+            audit_id = f"{uuid}::roof-oblique::oblique:{idx}"
+            committed_out.append(
+                {
+                    "index": idx,
+                    "corners": corners,
+                    "story": ob.get("dominant_story"),
+                    "avg_incl": cl.get("avgIncl"),
+                    "avg_azimuth": cl.get("avgAzimuth"),
+                    "surface_kind": ob.get("surface_kind"),
+                    "audit_id": audit_id,
+                    "audit": _slim_audit(audit_by_id.get(audit_id)),
+                }
+            )
+        flat_out: list[dict] = []
+        for idx, fl in enumerate(roof_surfaces.get("flat") or []):
+            audit_id = f"{uuid}::roof-flat::flat:{idx}"
+            flat_out.append(
+                {
+                    "index": idx,
+                    "corners": fl.get("corners") or [],
+                    "story": fl.get("dominant_story"),
+                    "surface_kind": fl.get("surface_kind"),
+                    "audit_id": audit_id,
+                    "audit": _slim_audit(audit_by_id.get(audit_id)),
+                }
+            )
+
+        exposed_keys: set[tuple[int, int]] = set()
+        for entry in (ceiling.get("exposed_rooms") or []):
+            si = entry.get("story")
+            ri = entry.get("room_index")
+            if si is not None and ri is not None:
+                exposed_keys.add((int(si), int(ri)))
+
+        raw_ceilings_out: list[dict] = []
+        floors_out: list[dict] = []
+        ceilings_out: list[dict] = []
+        for ri, room in enumerate(building.get("rooms") or []):
+            story = int(room.get("story", 0))
+            # raw_ceiling_planes was populated by an earlier pipeline
+            # revision; the current rebuild no longer attaches it. Tolerate
+            # either shape so the endpoint works across rebuilds.
+            for pi, plane in enumerate(room.get("raw_ceiling_planes") or []):
+                corners = plane.get("corners") or []
+                if len(corners) < 3:
+                    continue
+                raw_ceilings_out.append(
+                    {
+                        "story": story,
+                        "room_index": ri,
+                        "plane_index": pi,
+                        "corners": corners,
+                        "exposed": (story, ri) in exposed_keys,
+                        "element_id": f"{uuid}::ceiling-raw::{story}:{ri}:{pi}",
+                    }
+                )
+            fp = room.get("floor_polygon") or []
+            if len(fp) >= 3:
+                floors_out.append(
+                    {
+                        "story": story,
+                        "room_index": ri,
+                        "corners": fp,
+                    }
+                )
+            cp = room.get("ceiling_polygon") or []
+            if len(cp) >= 3:
+                ceilings_out.append(
+                    {
+                        "story": story,
+                        "room_index": ri,
+                        "corners": cp,
+                        "ceiling_type": room.get("ceiling_type"),
+                        "ridge_y": room.get("ceiling_ridge_height"),
+                        "eave_y": room.get("ceiling_eave_height"),
+                    }
+                )
+
+        addr = building.get("address")
+        if isinstance(addr, dict):
+            addr = " ".join(
+                str(addr.get(k, ""))
+                for k in ("street", "number", "postcode", "city")
+                if addr.get(k)
+            ).strip()
+
+        payload = {
+            "uuid": uuid,
+            "address": addr or None,
+            "segments": segments_out,
+            "clusters": clusters_out,
+            "candidates": candidates_out,
+            "committed": committed_out,
+            "flat": flat_out,
+            "raw_ceilings": raw_ceilings_out,
+            "floors": floors_out,
+            "room_ceilings": ceilings_out,
+            "audit_thresholds": {
+                "weak_abs_dy_m": 0.5,
+                "weak_normal_dot": 0.80,
+                "min_xz_coverage_for_judgement": 0.10,
+            },
+        }
+
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    @staticmethod
+    def _candidate_corners_3d(plane: dict) -> list[list[float]]:
+        """Expand a ceiling.plane bbox (ridge/slope coords) to 4 3D corners.
+
+        Mirrors ``scripts/audit_scan_ceiling_support.py::_candidate_polygon``
+        but produces y-values from the plane equation instead of dropping to
+        the XZ projection.
+        """
+        try:
+            rx = float(plane["ridgeX"])
+            rz = float(plane["ridgeZ"])
+            sx = float(plane["slopeX"])
+            sz = float(plane["slopeZ"])
+            ref = plane["ref"]
+            rx0, ry0, rz0 = float(ref["x"]), float(ref["y"]), float(ref["z"])
+            n = plane["n"]
+            nx, ny, nz = float(n["x"]), float(n["y"]), float(n["z"])
+        except (KeyError, TypeError, ValueError):
+            return []
+
+        def y_at(x: float, z: float) -> float:
+            if abs(ny) < 1e-6:
+                return ry0
+            return ry0 - (nx * (x - rx0) + nz * (z - rz0)) / ny
+
+        bounds = [
+            (plane["minRidge"], plane["minSlope"]),
+            (plane["maxRidge"], plane["minSlope"]),
+            (plane["maxRidge"], plane["maxSlope"]),
+            (plane["minRidge"], plane["maxSlope"]),
+        ]
+        corners: list[list[float]] = []
+        for r_, s_ in bounds:
+            x = rx0 + float(r_) * rx + float(s_) * sx
+            z = rz0 + float(r_) * rz + float(s_) * sz
+            corners.append([x, float(y_at(x, z)), z])
+        return corners
+
+    def _handle_ridge_eave_scores(self, query: str):
+        """Return ridge/eave topology scores for one building.
+
+        Produced by ``scripts/score_candidates_ridge_eave.py``. Response is
+        the per-building scoring slice — candidate best-pair scores plus
+        the pair geometry (ridge, medial axis, eaves, OBB) for rendering.
+        """
+        global RIDGE_EAVE_CACHE, RIDGE_EAVE_CACHE_MTIME
+        params = urllib.parse.parse_qs(query)
+        uuid = (params.get("uuid") or [None])[0]
+        if not uuid:
+            self.send_error(HTTPStatus.BAD_REQUEST, "Missing uuid query param")
+            return
+        if not RIDGE_EAVE_SCORES_PATH.exists():
+            self.send_error(
+                HTTPStatus.NOT_FOUND,
+                f"{RIDGE_EAVE_SCORES_PATH.name} not found; run "
+                "`python scripts/score_candidates_ridge_eave.py` first.",
+            )
+            return
+        try:
+            mtime = RIDGE_EAVE_SCORES_PATH.stat().st_mtime
+            if mtime != RIDGE_EAVE_CACHE_MTIME or not RIDGE_EAVE_CACHE:
+                with open(RIDGE_EAVE_SCORES_PATH) as handle:
+                    data = json.load(handle)
+                RIDGE_EAVE_CACHE = {
+                    entry.get("building_uuid"): entry
+                    for entry in (data.get("buildings") or [])
+                    if entry.get("building_uuid")
+                }
+                RIDGE_EAVE_CACHE_MTIME = mtime
+        except Exception as exc:
+            self.send_error(
+                HTTPStatus.BAD_GATEWAY, f"ridge-eave-scores load failed: {exc}"
+            )
+            return
+        payload = RIDGE_EAVE_CACHE.get(uuid)
+        if payload is None:
+            self.send_error(
+                HTTPStatus.NOT_FOUND,
+                f"No ridge/eave scores for {uuid}; rerun scorer.",
+            )
+            return
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_raw_ceiling_prototype(self):
+        """Return the Phase-2 raw-ceiling role + reconstruction sidecar.
+
+        Combines ``reports/raw_ceiling_prototype/roles.json`` and
+        ``reconstructions.json`` into a single payload the viewer fetches
+        once. Either file may be absent (prototype not yet run) — the
+        missing section returns as empty.
+        """
+        global RAW_CEILING_PROTOTYPE_CACHE, RAW_CEILING_PROTOTYPE_CACHE_MTIME
+        roles_mtime = (
+            RAW_CEILING_ROLES_PATH.stat().st_mtime
+            if RAW_CEILING_ROLES_PATH.exists()
+            else 0.0
+        )
+        recon_mtime = (
+            RAW_CEILING_RECON_PATH.stat().st_mtime
+            if RAW_CEILING_RECON_PATH.exists()
+            else 0.0
+        )
+        if (
+            not RAW_CEILING_PROTOTYPE_CACHE
+            or (roles_mtime, recon_mtime) != RAW_CEILING_PROTOTYPE_CACHE_MTIME
+        ):
+            roles_data: dict = {}
+            recon_data: dict = {}
+            if RAW_CEILING_ROLES_PATH.exists():
+                try:
+                    roles_data = json.loads(RAW_CEILING_ROLES_PATH.read_text())
+                except Exception:
+                    roles_data = {}
+            if RAW_CEILING_RECON_PATH.exists():
+                try:
+                    recon_data = json.loads(RAW_CEILING_RECON_PATH.read_text())
+                except Exception:
+                    recon_data = {}
+            RAW_CEILING_PROTOTYPE_CACHE = {
+                "thresholds": roles_data.get("thresholds") or {},
+                "planes": roles_data.get("planes") or {},
+                "rooms": roles_data.get("rooms") or {},
+                "reconstructions": recon_data.get("buildings") or {},
+                "available": bool(roles_data) or bool(recon_data),
+            }
+            RAW_CEILING_PROTOTYPE_CACHE_MTIME = (roles_mtime, recon_mtime)
+        body = json.dumps(RAW_CEILING_PROTOTYPE_CACHE).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_computed_overextend(self):
+        """Return per-surface overextend polygons keyed by building uuid.
+
+        Source: ``reports/computed_extent_vs_raw/overextend_polygons.json``,
+        produced by ``scripts/audit_computed_surface_extent_vs_raw.py``.
+        Missing file returns an empty payload with ``available: false``.
+        """
+        global COMPUTED_OVEREXTEND_CACHE, COMPUTED_OVEREXTEND_CACHE_MTIME
+        mtime = (
+            COMPUTED_OVEREXTEND_PATH.stat().st_mtime
+            if COMPUTED_OVEREXTEND_PATH.exists()
+            else 0.0
+        )
+        if (
+            not COMPUTED_OVEREXTEND_CACHE
+            or mtime != COMPUTED_OVEREXTEND_CACHE_MTIME
+        ):
+            data: dict = {}
+            if COMPUTED_OVEREXTEND_PATH.exists():
+                try:
+                    data = json.loads(COMPUTED_OVEREXTEND_PATH.read_text())
+                except Exception:
+                    data = {}
+            COMPUTED_OVEREXTEND_CACHE = {
+                "buildings": data.get("buildings") or {},
+                "available": bool(data),
+            }
+            COMPUTED_OVEREXTEND_CACHE_MTIME = mtime
+        body = json.dumps(COMPUTED_OVEREXTEND_CACHE).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_raw_disagreement(self):
+        """Return raw-ceiling orientation-disagreement polygons keyed by
+        building uuid.
+
+        Source: ``reports/raw_orientation_disagreement/disagreement_polygons.json``,
+        produced by ``scripts/audit_raw_orientation_disagreement.py``.
+        Missing file returns an empty payload with ``available: false``.
+        """
+        global RAW_DISAGREEMENT_CACHE, RAW_DISAGREEMENT_CACHE_MTIME
+        mtime = (
+            RAW_DISAGREEMENT_PATH.stat().st_mtime
+            if RAW_DISAGREEMENT_PATH.exists()
+            else 0.0
+        )
+        if (
+            not RAW_DISAGREEMENT_CACHE
+            or mtime != RAW_DISAGREEMENT_CACHE_MTIME
+        ):
+            data: dict = {}
+            if RAW_DISAGREEMENT_PATH.exists():
+                try:
+                    data = json.loads(RAW_DISAGREEMENT_PATH.read_text())
+                except Exception:
+                    data = {}
+            RAW_DISAGREEMENT_CACHE = {
+                "buildings": data.get("buildings") or {},
+                "available": bool(data),
+            }
+            RAW_DISAGREEMENT_CACHE_MTIME = mtime
+        body = json.dumps(RAW_DISAGREEMENT_CACHE).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_ceiling_replacement(self):
+        """Return clean-ceiling replacement polygons keyed by building uuid.
+
+        Source: ``reports/noisy_slanted_ceilings/replacement_polygons.json``,
+        produced by ``scripts/audit_noisy_slanted_ceiling_replacement.py``.
+        Missing file returns an empty payload with ``available: false``.
+        """
+        global CEILING_REPLACEMENT_CACHE, CEILING_REPLACEMENT_CACHE_MTIME
+        mtime = (
+            CEILING_REPLACEMENT_PATH.stat().st_mtime
+            if CEILING_REPLACEMENT_PATH.exists()
+            else 0.0
+        )
+        if (
+            not CEILING_REPLACEMENT_CACHE
+            or mtime != CEILING_REPLACEMENT_CACHE_MTIME
+        ):
+            data: dict = {}
+            if CEILING_REPLACEMENT_PATH.exists():
+                try:
+                    data = json.loads(CEILING_REPLACEMENT_PATH.read_text())
+                except Exception:
+                    data = {}
+            CEILING_REPLACEMENT_CACHE = {
+                "buildings": data.get("buildings") or {},
+                "available": bool(data),
+            }
+            CEILING_REPLACEMENT_CACHE_MTIME = mtime
+        body = json.dumps(CEILING_REPLACEMENT_CACHE).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_reconstruction(self, query: str):
+        """Return the BIP solver's selection for one building, joined with
+        the matching candidate-face footprints so the viewer can render the
+        selected envelope without a second round-trip.
+
+        Response shape::
+
+            {
+              "building_uuid": "...",
+              "status": "solved" | "ambiguous" | "infeasible" | "no_candidates",
+              "decision": "auto_accept" | "review",
+              "selected_face_ids": [...],
+              "selected_faces": [ <candidate-face dict>, ... ],
+              "objective_value": ..., "runner_up_objective": ...,
+              "coverage_ratio": ..., "lp_gap": ..., "solve_time_ms": ...,
+              "reason": ...
+            }
+        """
+        global RECONSTRUCTION_CACHE, RECONSTRUCTION_CACHE_MTIME
+        global CANDIDATE_FACES_CACHE, CANDIDATE_FACES_CACHE_MTIME
+        params = urllib.parse.parse_qs(query)
+        uuid = (params.get("uuid") or [None])[0]
+        if not uuid:
+            self.send_error(HTTPStatus.BAD_REQUEST, "Missing uuid query param")
+            return
+        if not RECONSTRUCTION_PATH.exists():
+            self.send_error(
+                HTTPStatus.NOT_FOUND,
+                f"{RECONSTRUCTION_PATH.name} not found; run "
+                "`python scripts/run_reconstruction_solver.py` first.",
+            )
+            return
+        try:
+            mtime = RECONSTRUCTION_PATH.stat().st_mtime
+            if mtime != RECONSTRUCTION_CACHE_MTIME or not RECONSTRUCTION_CACHE:
+                with open(RECONSTRUCTION_PATH) as handle:
+                    data = json.load(handle)
+                RECONSTRUCTION_CACHE = {
+                    entry.get("building_uuid"): entry
+                    for entry in data
+                    if entry.get("building_uuid")
+                }
+                RECONSTRUCTION_CACHE_MTIME = mtime
+        except Exception as exc:
+            self.send_error(
+                HTTPStatus.BAD_GATEWAY, f"reconstruction load failed: {exc}"
+            )
+            return
+        payload = RECONSTRUCTION_CACHE.get(uuid)
+        if payload is None:
+            self.send_error(
+                HTTPStatus.NOT_FOUND,
+                f"No reconstruction result for {uuid}; rerun the solver CLI.",
+            )
+            return
+
+        # Join with the candidate-face cache so the viewer has polygon
+        # footprints for the selected ids.
+        try:
+            cmtime = (
+                CANDIDATE_FACES_PATH.stat().st_mtime
+                if CANDIDATE_FACES_PATH.exists()
+                else 0.0
+            )
+            if cmtime and (cmtime != CANDIDATE_FACES_CACHE_MTIME
+                           or not CANDIDATE_FACES_CACHE):
+                with open(CANDIDATE_FACES_PATH) as handle:
+                    cdata = json.load(handle)
+                CANDIDATE_FACES_CACHE = {
+                    entry.get("building_uuid"): entry
+                    for entry in cdata
+                    if entry.get("building_uuid")
+                }
+                CANDIDATE_FACES_CACHE_MTIME = cmtime
+        except Exception:
+            pass
+
+        selected_ids = set(payload.get("selected_face_ids") or [])
+        selected_faces: list[dict] = []
+        bldg_candidates = (CANDIDATE_FACES_CACHE.get(uuid) or {}).get("candidates") or []
+        if selected_ids and bldg_candidates:
+            selected_faces = [
+                c for c in bldg_candidates if c.get("id") in selected_ids
+            ]
+
+        response = dict(payload)
+        response["selected_faces"] = selected_faces
+        body = json.dumps(response).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _handle_ontology_artifacts(self, query: str):
         params = urllib.parse.parse_qs(query)
         uuid = (params.get("uuid") or [None])[0]
@@ -2675,6 +4674,11 @@ class ViewerHandler(SimpleHTTPRequestHandler):
                 payload = entry["parts"].get(part_id)
                 if payload is None:
                     self.send_error(HTTPStatus.NOT_FOUND, f"No ontology part {part_id} for {uuid}")
+                    return
+            elif view == "full-model":
+                payload = entry.get("full_model")
+                if payload is None:
+                    self.send_error(HTTPStatus.NOT_FOUND, f"No full-model payload for {uuid}")
                     return
             else:
                 self.send_error(HTTPStatus.BAD_REQUEST, f"Unsupported ontology view: {view}")

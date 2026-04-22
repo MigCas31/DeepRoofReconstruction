@@ -539,10 +539,57 @@ def compute_gap_walls(gaps, rooms_out, story_y_map, gap_closures=None, graph=Non
             )
             walls.append(entry)
 
-        # Floor & ceiling caps: the gap polygon is a thin ribbon whose short
+        # Polygon-wide floor + ceiling caps for the entire gap polygon.
+        # Without these, long within-story ribbons (e.g. post-clip slivers
+        # between adjacent rooms) get vertical walls only and render as
+        # visible holes in the floor. Parallels reconcile_v3 close_obvious_gaps.
+        cap_ceiling_ys = [
+            snap_ceiling_y(np.array([v[0], v[2]]), story, gap_floor_y)
+            for v in edge_verts
+        ]
+        cap_ceiling_y = float(np.median(cap_ceiling_ys))
+        polygon_floor = {
+            "corners": [[v[0], gap_floor_y, v[2]] for v in edge_verts],
+            "type": "gap_floor",
+            "story": story,
+            "confidence": gap["confidence"],
+            "ontology_gap_id": gap.get("_ontology_gap_id"),
+        }
+        if gap.get("_ontology_gap_id"):
+            polygon_floor["id"] = (
+                f"gw:{gap['_ontology_gap_id']}:gap_floor_polygon:{len(walls)}"
+            )
+        record(
+            polygon_floor,
+            STEP_GAP_WALLS,
+            "created",
+            f"type=gap_floor_polygon, confidence={gap['confidence']}",
+        )
+        walls.append(polygon_floor)
+
+        polygon_ceiling = {
+            "corners": [[v[0], cap_ceiling_y, v[2]] for v in edge_verts],
+            "type": "gap_ceiling",
+            "story": story,
+            "confidence": gap["confidence"],
+            "ontology_gap_id": gap.get("_ontology_gap_id"),
+        }
+        if gap.get("_ontology_gap_id"):
+            polygon_ceiling["id"] = (
+                f"gw:{gap['_ontology_gap_id']}:gap_ceiling_polygon:{len(walls)}"
+            )
+        record(
+            polygon_ceiling,
+            STEP_GAP_WALLS,
+            "created",
+            f"type=gap_ceiling_polygon, confidence={gap['confidence']}",
+        )
+        walls.append(polygon_ceiling)
+
+        # Short-edge caps: the gap polygon is often a thin ribbon whose short
         # edges (~wall thickness) connect inner/outer outlines.  Emit one
-        # quad per short cross-edge, clamped so it doesn't extend further
-        # than the wall thickness into the adjacent run edges.
+        # narrow quad per short cross-edge, clamped so it doesn't extend
+        # further than the wall thickness into the adjacent run edges.
         short_edge_threshold = 0.25  # metres — wall-thickness edges
         max_cap_reach = 0.30  # don't extend further than this along run edges
 
