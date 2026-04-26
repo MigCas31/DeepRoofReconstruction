@@ -110,6 +110,15 @@ When you encounter a geometry bug or design decision, ask: *"What would this loo
 - If a ceiling plane is below the floor → the height cap computation failed (ceilings are above floors)
 - If the azimuth of a roof segment doesn't match the building orientation → check coordinate transforms (buildings face consistent directions)
 
+### Human-First Troubleshooting
+
+When debugging why an element was classified as X instead of Y, or why it was included/excluded from a set, do **not** jump straight to threshold tweaking or heuristic patching. Start with the human-visible reality:
+
+- Ask what a human sees immediately that the algorithm missed: shape, support, height, continuity, adjacency, footprint containment, roof coverage, or room/story context.
+- State the physical reason the element "obviously" belongs to class X or not-Y before inspecting the code path.
+- Use heuristics as things to audit, not truths to trust. The goal is to explain the gap between human perception and machine classification.
+- Prefer fixes that model the missing physical signal or decision boundary more directly, rather than stacking another special case on top.
+
 ### Architectural Vocabulary
 
 Use these terms correctly — they map to specific code concepts:
@@ -189,7 +198,8 @@ Every time you modify files in `reconcile/`, `reconcile_v2/`, or `reconcile_v3/`
 | [Testing](/.agents/skills/testing/SKILL.md) | pytest, fixtures, test coverage |
 | [Danish Geodata](/.agents/skills/danish-geodata/SKILL.md) | Datafordeler API, building footprints, WMTS |
 | [Run & Verify](/.agents/skills/run-and-verify/SKILL.md) | End-to-end pipeline runs, server restart, browser verification |
-| [Debug Element](/.agents/skills/debug-element/SKILL.md) | Triage a shareable element ID (legacy or ontology-*), trace to pipeline + thresholds, propose root cause |
+| [Debug Element](/.agents/skills/debug-element/SKILL.md) | Triage a shareable element ID (legacy, ontology-*, or tier-*), trace to pipeline + thresholds, propose root cause |
+| [Inspect Building](/.agents/skills/inspect-building/SKILL.md) | **Run first** when the user reports an issue with a building or element (anything wrong/weird/missing/broken) or asks for the full picture of a UUID. Builds a one-folder report with screenshots, LoD2 realism flags, and tier_payload defect audit so you have context before forming hypotheses. Hand off to Debug Element for single-element root cause. |
 
 ### Using Skills
 
@@ -211,3 +221,68 @@ Before writing code that matches a skill's domain:
 | [numpy docs](https://numpy.org/doc/) | Vector/matrix operations |
 | [Datafordeler API docs](https://datafordeler.dk/) | Danish geodata API reference |
 | `pipeline-outputs/` | Real building data for visual testing |
+
+---
+
+## Universal Coding Guidelines
+
+Behavioral guidelines to reduce common LLM coding mistakes. Source: [forrestchang/andrej-karpathy-skills](https://github.com/forrestchang/andrej-karpathy-skills), derived from [Andrej Karpathy's observations](https://x.com/karpathy/status/2015883857489522876). These apply on top of the project-specific guidance above.
+
+**Tradeoff:** these bias toward caution over speed. For trivial tasks (typo fixes, obvious one-liners), use judgment.
+
+### 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them — don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+### 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+### 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it — don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: every changed line should trace directly to the user's request.
+
+### 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.

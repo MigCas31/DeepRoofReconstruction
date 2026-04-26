@@ -5,9 +5,11 @@ description: >
   looks wrong or what caused a geometry issue. Covers legacy kinds (floor, roof-oblique,
   wall-merged, ceiling-flat, …) and ontology-* kinds (ontology-renderable-ceiling,
   ontology-renderable-roof, ontology-knee-wall, ontology-unresolved-coverage,
-  ontology-base-*, …). Resolves the element, traces it to the pipeline step and
-  thresholds that produced it, runs existing audits as evidence, proposes ranked root
-  causes and candidate fixes — without committing changes.
+  ontology-base-*, …), plus static tier viewer tier-* locators from
+  pipeline-outputs/<uuid>/tier_payload.json. Resolves the element, traces it to
+  the pipeline step and thresholds that produced it, runs existing audits as
+  evidence, proposes ranked root causes and candidate fixes — without committing
+  changes.
 ---
 
 # Debug an Element
@@ -15,6 +17,15 @@ description: >
 A building surveyor or engineer saw something off in the viewer, right-clicked to copy the element's shareable locator, and now wants a root-cause analysis. This skill turns that ID into a reproducible triage: **parse → resolve → probe with evals → propose fixes**.
 
 The skill is for **diagnosis**. It may write scratch scripts, reproduction tests, and temporary logging. It must not leave shared pipeline code or heuristics modified at the end of a session, and must not commit.
+
+## Core Rule
+
+When the question is "why is this element classified as X instead of Y?" or "why was it included here but excluded there?", do not anchor on the current heuristic first. Anchor on the human reading first:
+
+- Explain what a human observer is using to make the judgment: support, slope, footprint containment, continuity with neighboring surfaces, story/room context, wall-vs-roof behavior, or other physical cues.
+- Treat the current thresholds and branches as suspects, not as ground truth.
+- Frame the debugging task as: "what signal is the human using that the pipeline failed to encode, propagated incorrectly, or overrode with a weaker heuristic?"
+- Prefer root causes that close that perception gap over local threshold nudges that only make the output look right on one building.
 
 ## How to Work on an Element ID
 
@@ -24,7 +35,7 @@ The skill is for **diagnosis**. It may write scratch scripts, reproduction tests
    python -m reconcile.element_locator --element-id "<token>" --trace
    ```
 
-   The output gives: parsed kind, resolved atom / surface record, `provenance_paths` into `roof_algorithms_py_results.json`, `evidence`, the candidate `thresholds`, and the `pipeline_step` that likely minted the atom. Legacy kinds resolve against `reconcile/buildings_3d.json`; ontology kinds resolve against `reconcile/roof_algorithms_py_results.json`.
+   The output gives: parsed kind, resolved atom / surface record, `provenance_paths` into `roof_algorithms_py_results.json`, `evidence`, the candidate `thresholds`, and the `pipeline_step` that likely minted the atom. Legacy kinds resolve against `reconcile/buildings_3d.json`; ontology kinds resolve against `reconcile/roof_algorithms_py_results.json`; tier kinds resolve against `pipeline-outputs/<uuid>/tier_payload.json`.
 
 2. **Characterize the element geometrically with the probe.** Before asking any questions, dump the stick-out metrics and the neighborhood around the atom — it usually rules out two or three symptoms on its own.
 
@@ -52,13 +63,15 @@ The skill is for **diagnosis**. It may write scratch scripts, reproduction tests
 
 3. **Confirm the building payload exists on disk**: `ls pipeline-outputs/<uuid>/`. If not, stop and ask the user to rerun extraction (`python reconcile/extract_3d.py <uuid>`) — you can't debug a rendering issue without the underlying data.
 
-4. **Ask the user what looks wrong before forming a hypothesis.** Use `AskUserQuestion` with concrete visual symptoms as options — never guess from the ID alone. Good defaults:
+4. **Ask the user what looks wrong before forming a hypothesis.** Describe the symptom in human/building terms first, not pipeline terms. Never guess from the ID alone. Good defaults:
    - Wrong shape / missing corners
    - Surface extends past the building footprint
    - Missing (hole where this element should be)
    - Overlapping or duplicated with another element
    - Wrong orientation (azimuth / inclination)
    - Positioned wrongly (too high / too low / wrong story)
+
+   Before you inspect thresholds, write down one sentence answering: "Why would a competent surveyor instantly call this X and not Y?" If you cannot answer that clearly, you are not ready to debug the classification.
 
    If the user reports a **missing** element (there's no ID to paste because the element isn't there), ask them for an approximate 3D point from the viewer and probe *that*:
 
@@ -198,6 +211,15 @@ Emitted by the full-model viewer in `reconcile/viewer-modules/full-model-ontolog
 | `ontology-fallback-ceiling` | `fallback_room_ceiling` | `ceiling.simple_slant` / `ceiling.room_partitions` |
 
 The 20-char hash (e.g. `b1cdb83686f103bb1e26`) is produced by `_stable_hash(...)` in `reconcile/roof_algorithms_py/graph_utils.py` — deterministic from the atom inputs (room id, corners, owner). **A hash change means inputs changed**, not randomness.
+
+### Static tier viewer kinds
+
+Emitted by `reconcile_tiers/web/viewer-tiers.html` and resolved against `pipeline-outputs/<uuid>/tier_payload.json`. Kinds include `tier-room`, `tier-wall`, `tier-gap`, `tier-ceiling-*`, and `tier-knee-wall`; wall extensions, doors, and windows are suffixes on the room/wall locator IDs. The probe command loads this payload through `--pipeline-dir` (default `pipeline-outputs`), so copied IDs from the static tier viewer can be used directly:
+
+```bash
+python -m reconcile.element_locator --element-id "<uuid>::tier-knee-wall::<id>" --trace
+python -m scripts.probe_element --element-id "<uuid>::tier-knee-wall::<id>" --human
+```
 
 ## Symptom → Suspect Map
 
