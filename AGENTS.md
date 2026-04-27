@@ -159,7 +159,7 @@ This is a **computational geometry** codebase — algorithms here have known cor
 
 ### When Modifying Algorithms
 
-- **Understand the full pipeline** before changing a step — changes cascade (see roof-pipeline skill)
+- **Understand the full pipeline** before changing a step — changes cascade
 - **Don't change thresholds** unless you've tested on multiple buildings from `pipeline-outputs/`
 - **Keep parity** with calor/web-main where both codebases implement the same logic (e.g., grid convergence)
 - **Visualize your changes** — use the viewer to confirm geometry looks correct, not just that tests pass
@@ -185,29 +185,6 @@ Every time you modify files in `reconcile/`, `reconcile_v2/`, or `reconcile_v3/`
 - Coordinate systems: UTM32N (EPSG:25832) for metric, WGS84 for GPS. Always apply grid convergence.
 - `reconcile/cli_v2.py` is just a shim — delegates to `reconcile_v2.cli`
 - Roof pipeline steps MUST run in order — each depends on previous output
-
-## Skills
-
-| Skill | When to use |
-|-------|-------------|
-| [Geometry](/.agents/skills/geometry/SKILL.md) | Vec3, transforms, coordinate systems, numpy math |
-| [Extraction Pipeline](/.agents/skills/extraction-pipeline/SKILL.md) | extract_3d, builder pattern, cross-floor gaps |
-| [Roof Pipeline](/.agents/skills/roof-pipeline/SKILL.md) | Roof detection, ceiling planes, oblique surfaces |
-| [Viewer](/.agents/skills/viewer/SKILL.md) | Three.js viewer, orthophotos, MapLibre |
-| [Topology V2](/.agents/skills/topology-v2/SKILL.md) | Graph topology, wall thickness, IFC mapping |
-| [Testing](/.agents/skills/testing/SKILL.md) | pytest, fixtures, test coverage |
-| [Danish Geodata](/.agents/skills/danish-geodata/SKILL.md) | Datafordeler API, building footprints, WMTS |
-| [Run & Verify](/.agents/skills/run-and-verify/SKILL.md) | End-to-end pipeline runs, server restart, browser verification |
-| [Debug Element](/.agents/skills/debug-element/SKILL.md) | Triage a shareable element ID (legacy, ontology-*, or tier-*), trace to pipeline + thresholds, propose root cause |
-| [Inspect Building](/.agents/skills/inspect-building/SKILL.md) | **Run first** when the user reports an issue with a building or element (anything wrong/weird/missing/broken) or asks for the full picture of a UUID. Builds a one-folder report with screenshots, LoD2 realism flags, and tier_payload defect audit so you have context before forming hypotheses. Hand off to Debug Element for single-element root cause. |
-
-### Using Skills
-
-Before writing code that matches a skill's domain:
-
-1. **Read the skill file** and any linked source files
-2. **Apply the patterns exactly** — don't improvise when a pattern exists
-3. **Check constants and thresholds** — many have been tuned through production use
 
 ## References
 
