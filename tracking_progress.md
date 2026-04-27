@@ -7568,3 +7568,89 @@ breaking existing references during the transition.
   passed.
 - `rg -n "/tier-index|/building-merged|viewer_server|viewer-main|viewer-modules|ontology|reconcile_v2|reconcile_v3" reconcile_tiers/web -S`:
   no matches.
+
+## 2026-04-27 — minimal hard-cleanup restructure for roof reconstruction
+
+**What changed**:
+- Restructured the repository to a minimal top-level layout centered on
+  `input_files/`, `reconcile/`, `visualization/`, and `tests/`.
+- Moved `pipeline-outputs/` to `input_files/pipeline-outputs/`.
+- Replaced the prior symlinked `visualization` path with a real
+  `visualization/` folder and restored a working viewer stack there
+  (`viewer.html`, `viewer-main.js`, `viewer-modules/`, `viewer_server.py`,
+  `buildings_3d.json`, `roof_algorithms_py_results.json`).
+- Added visualization mode controls in `visualization/viewer.html` and
+  `visualization/viewer-main.js`:
+  - `Reconciled default` (resets to pipeline step 0),
+  - `Show raw input`,
+  - `Show raw roof`.
+- Added `visualization/index.html` as the default web entry page redirecting to
+  `viewer.html`.
+- Relocated latest tiers pipeline code from `reconcile_tiers/` into
+  `reconcile/` and rewired imports from `reconcile_tiers.*` to `reconcile.*`.
+- Hard-deleted nonessential root and legacy directories/files for the requested
+  minimal scope (`archive/`, `docs/`, `reports/`, `schemas/`, `scripts/`,
+  `reconcile_ext/`, `reconcile_v2/`, `reconcile_v3/`, and root investigation
+  scripts).
+- Added `keep_manifest.md` documenting kept top-level folders/files.
+
+**Why**: The goal was to simplify the repository aggressively for a new
+roof-reconstruction workflow that keeps raw/reconciled inputs clear, while
+shipping a visualization entrypoint with explicit raw-input/raw-roof toggles.
+
+**Result**:
+- Root layout now reflects the requested simplified structure.
+- `python -m reconcile.cli --help` succeeds after relocation.
+- Lint diagnostics for edited files reported no new issues.
+- `python -m pytest tests/reconcile -q` could not run in this environment
+  because `pytest` is not installed (`No module named pytest`).
+
+## 2026-04-27 — Model dataset prep for reconciled + raw roof samples
+
+**What changed**:
+- Added `model/prepare_dataset.py` to convert `input_files/pipeline-outputs/<uuid>/`
+  into `output_root/<uuid>/reconciled_input.json` and `output_root/<uuid>/raw_roof.json`.
+- The converter now treats `reconciled.json` as the reconciled input source and extracts
+  raw roof planes primarily from `rooms[].raw_ceiling_planes`, with fallback to
+  `tier_payload.json` ceilings where `source == "raw_fallback"` when room-level raw data
+  is missing.
+- Extended `model/data.py` with `load_prepared_sample()` and reconciled-dict context
+  tokenization, so training can load the new two-file prepared sample format.
+- Updated `model/train.py` to support `--sample-dir` while keeping legacy
+  `--payload/--noisy/--target` mode.
+- Updated `model/README.md` with dataset preparation and new training usage examples.
+
+**Why**:
+- Needed a direct bridge from current pipeline outputs to the model scaffold, using the
+  exact reconciled input seen by default in the viewer plus a raw-roof channel in a
+  stable per-building folder format.
+
+**Result**:
+- The model pipeline can now train from one prepared folder containing exactly two JSON
+  files (`reconciled_input.json` and `raw_roof.json`) without manually wiring three
+  independent input files.
+- Verification commands were run to generate sample folders and execute one training epoch
+  with `--sample-dir` (results captured in command output).
+
+## 2026-04-27 — Align raw-roof training source with visualization mode
+
+**What changed**:
+- Updated `model/prepare_dataset.py` so `raw_roof.json` is now sourced from
+  `visualization/buildings_3d.json` (indexed by building `uuid`) instead of
+  pipeline-output room payloads.
+- Raw roof extraction now mirrors viewer behavior exactly by reading
+  `rooms[].raw_ceiling_planes[]` with room-level `raw_ceiling_source`.
+- Added `--viewer-buildings` CLI argument to `model.prepare_dataset` (default:
+  `visualization/buildings_3d.json`) and counters for
+  `missing_viewer_building` plus `missing_raw_roof`.
+- Updated `model/README.md` to document viewer-aligned raw-roof sourcing.
+
+**Why**:
+- Requested alignment so model training consumes the exact same raw roof evidence
+  shown by the visualization "Show raw roof" toggle.
+
+**Result**:
+- Prepared sample generation now produces non-empty `raw_roof.json` for validated
+  UUIDs where viewer payload has raw ceilings.
+- One-sample verification showed `plane_count=43` with extraction mode
+  `visualization.buildings_3d.rooms.raw_ceiling_planes`.
