@@ -46,16 +46,13 @@ body { background:#111; color:#ddd; font-family:-apple-system,BlinkMacSystemFont
   pointer-events:none;
 }
 #controls-bar > * { pointer-events:auto; }
-.mode-buttons { display:flex; gap:8px; margin-right:8px; }
-.mode-buttons button {
-  border:1px solid #3b3b5a; border-radius:6px; background:#1b1b2f; color:#d7d7ea;
-  padding:5px 10px; font-size:11px; cursor:pointer;
-}
-.mode-buttons button:hover { background:#262640; }
-.toggle-row { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:11px; max-width:600px; }
+.mode-buttons { display:flex; gap:16px; margin-right:8px; font-size:12px; }
+.mode-buttons label { cursor:pointer; display:flex; align-items:center; gap:6px; color:#d7d7ea; }
+.mode-buttons input { accent-color:#3a3aff; }
+.toggle-row { display:none; flex-wrap:wrap; gap:6px 14px; font-size:11px; max-width:600px; }
 .toggle-row label { cursor:pointer; display:flex; align-items:center; gap:4px; white-space:nowrap; }
 .toggle-row input { accent-color:#3a3aff; }
-#legend-box { font-size:10px; line-height:1.8; }
+#legend-box { display:none; font-size:10px; line-height:1.8; }
 #legend-box span { display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:middle; margin-right:3px; }
 .raw-split-compare {
   display:flex; align-items:center; gap:6px; padding:4px 8px;
@@ -79,7 +76,7 @@ body { background:#111; color:#ddd; font-family:-apple-system,BlinkMacSystemFont
   position:absolute; bottom:40px; left:0; right:0; z-index:10;
   padding:8px 14px;
   background:linear-gradient(to top, rgba(0,0,0,.7) 0%, transparent 100%);
-  pointer-events:none; display:flex; align-items:center; gap:8px; font-size:11px;
+  pointer-events:none; display:none; align-items:center; gap:8px; font-size:11px;
 }
 #pipeline-bar > * { pointer-events:auto; }
 .pipeline-step-pill {
@@ -155,9 +152,14 @@ canvas { display:block; width:100%; height:100%; }
 <div id="viewport">
   <div id="controls-bar">
     <div class="mode-buttons">
-      <button id="mode-reconciled-default" title="Show reconciled input by default">Reconciled default</button>
-      <button id="mode-show-raw-input" title="Show raw input before reconciliation and without roof">Show raw input</button>
-      <button id="mode-show-raw-roof" title="Show raw ceiling and roof evidence">Show raw roof</button>
+      <label title="Show raw input before reconciliation and without roof">
+        <input type="checkbox" id="mode-show-raw-input">
+        <span>Show raw input</span>
+      </label>
+      <label title="Show raw ceiling and roof evidence">
+        <input type="checkbox" id="mode-show-raw-roof">
+        <span>Show raw roof</span>
+      </label>
     </div>
     <div class="toggle-row">
       <label><input type="checkbox" id="show-merged"> Merged (Apple)</label>

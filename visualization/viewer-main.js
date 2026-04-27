@@ -3493,10 +3493,9 @@ function loadBuilding(index, { resetPipeline = true } = {}) {
   updateOrthoPanelForBuilding(bldg);
 
   if (resetPipeline) {
-    applyPipelineStep(0);
-  } else {
-    applyPipelineStep(pipelineStepIndex);
+    pipelineStepIndex = 0;
   }
+  applyViewerVisibilityState();
 
   // `#layers=<comma-list>` overrides all layer toggles AFTER the pipeline
   // step (which normally sets them) — lets scripted loads capture an
@@ -3540,25 +3539,42 @@ function applyLayerPreset(layers) {
   }
 }
 
-const MODE_PRESETS = {
-  rawInput: ['merged', 'floors', 'doors', 'windows', 'rawCeilings'],
-  rawRoof: ['rawCeilings', 'roofClusters', 'ceilings'],
-};
+const BASE_RECONCILED_NO_ROOF = [
+  'computed', 'doors', 'windows', 'floors', 'extensions', 'gaps', 'crossStory', 'extGaps',
+];
+const RAW_INPUT_OVERLAY = ['merged'];
+const RAW_ROOF_OVERLAY = ['rawCeilings', 'ceilings', 'roofClusters'];
+let rawInputEnabled = false;
+let rawRoofEnabled = false;
 
-function applyModePreset(mode) {
-  if (mode === 'reconciledDefault') {
-    applyPipelineStep(0);
-    return;
+function applyViewerVisibilityState() {
+  const activeLayers = new Set(BASE_RECONCILED_NO_ROOF);
+  if (rawInputEnabled) {
+    for (const layer of RAW_INPUT_OVERLAY) activeLayers.add(layer);
   }
-  const layers = MODE_PRESETS[mode];
-  if (!layers) return;
-  applyLayerPreset(layers);
+  if (rawRoofEnabled) {
+    for (const layer of RAW_ROOF_OVERLAY) activeLayers.add(layer);
+  }
+  applyLayerPreset([...activeLayers]);
 }
 
-function bindModeButtons() {
-  document.getElementById('mode-reconciled-default')?.addEventListener('click', () => applyModePreset('reconciledDefault'));
-  document.getElementById('mode-show-raw-input')?.addEventListener('click', () => applyModePreset('rawInput'));
-  document.getElementById('mode-show-raw-roof')?.addEventListener('click', () => applyModePreset('rawRoof'));
+function bindModeToggles() {
+  const rawInputCtl = document.getElementById('mode-show-raw-input');
+  const rawRoofCtl = document.getElementById('mode-show-raw-roof');
+  if (rawInputCtl) {
+    rawInputCtl.checked = rawInputEnabled;
+    rawInputCtl.addEventListener('change', (event) => {
+      rawInputEnabled = !!event.target?.checked;
+      applyViewerVisibilityState();
+    });
+  }
+  if (rawRoofCtl) {
+    rawRoofCtl.checked = rawRoofEnabled;
+    rawRoofCtl.addEventListener('change', (event) => {
+      rawRoofEnabled = !!event.target?.checked;
+      applyViewerVisibilityState();
+    });
+  }
 }
 
 function stampRenderComplete() {
@@ -3642,7 +3658,7 @@ bindUIEventHandlers({
   setAnchorModeEnabled: (v) => { anchorModeEnabled = v; },
   getAnchorModeEnabled: () => anchorModeEnabled,
 });
-bindModeButtons();
+bindModeToggles();
 
 document.getElementById('merge-v3-roof-proposal-planes')?.addEventListener('change', () => {
   const bldg = DATA[currentBuilding];
