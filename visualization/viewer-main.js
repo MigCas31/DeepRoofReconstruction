@@ -4130,6 +4130,72 @@ document.getElementById('gt-mark-unclean')?.addEventListener('click', () => {
   markCurrentBuildingUnclean().catch((err) => updateGroundtruthPanelStatus(String(err)));
 });
 
+document.getElementById('open-skraafoto')?.addEventListener('click', async () => {
+  const bldg = DATA[currentBuilding];
+  if (!bldg) {
+    document.getElementById('building-info').textContent = 'No building selected';
+    return;
+  }
+  let address = '';
+  let scanLookupAvailable = true;
+  // Primary source: scan-cache data.json homeMetadata.address (by UUID).
+  if (bldg.uuid) {
+    try {
+      const resp = await fetch(`/scan-cache-address?uuid=${encodeURIComponent(bldg.uuid)}`, { cache: 'no-store' });
+      if (resp.ok) {
+        const payload = await resp.json();
+        if (payload && typeof payload.address === 'string') {
+          address = payload.address;
+        }
+      } else {
+        scanLookupAvailable = false;
+      }
+    } catch (_err) {
+      scanLookupAvailable = false;
+    }
+  }
+  // Fallback: existing in-memory building address.
+  if (!address && typeof bldg.address === 'string') {
+    address = bldg.address;
+  } else if (!address && bldg.address && typeof bldg.address === 'object') {
+    const parts = ['street', 'number', 'postcode', 'city']
+      .map((k) => bldg.address[k])
+      .filter((v) => typeof v === 'string' && v.trim().length > 0);
+    address = parts.join(' ');
+  }
+  // Preserve Danish characters exactly as plain text (e.g. Ø, Å, Æ)
+  // before copying.
+  address = String(address || '').normalize('NFC');
+  if (!address) {
+    document.getElementById('building-info').textContent = `No address available for ${bldg.uuid || 'selected building'}`;
+    window.open('https://skraafoto.dataforsyningen.dk/', '_blank', 'noopener,noreferrer');
+    return;
+  }
+
+  let copied = false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(address);
+      copied = true;
+    }
+  } catch (_err) {
+    copied = false;
+  }
+  if (!copied) {
+    copied = await copyText(address);
+  }
+  window.open('https://skraafoto.dataforsyningen.dk/', '_blank', 'noopener,noreferrer');
+  if (copied) {
+    if (!scanLookupAvailable) {
+      document.getElementById('building-info').textContent = `Skraafoto opened. Address copied via fallback (restart viewer server for .scan-cache Danish accents): ${address}`;
+    } else {
+      document.getElementById('building-info').textContent = `Skraafoto opened. Address copied: ${address}`;
+    }
+  } else {
+    document.getElementById('building-info').textContent = `Skraafoto opened. Copy failed — paste manually: ${address}`;
+  }
+});
+
 canvas.addEventListener("contextmenu", async (event) => {
   event.preventDefault();
   if (!DATA[currentBuilding]) return;

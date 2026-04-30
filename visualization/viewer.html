@@ -51,6 +51,19 @@ body { background:#111; color:#ddd; font-family:-apple-system,BlinkMacSystemFont
 .mode-buttons { display:flex; gap:16px; margin-right:8px; font-size:12px; }
 .mode-buttons label { cursor:pointer; display:flex; align-items:center; gap:6px; color:#d7d7ea; }
 .mode-buttons input { accent-color:#3a3aff; }
+.mode-buttons button {
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  gap:6px;
+  color:#d7d7ea;
+  border:1px solid #334155;
+  border-radius:6px;
+  background:#0f172a;
+  padding:4px 8px;
+  font-size:12px;
+}
+.mode-buttons button:hover { border-color:#60a5fa; }
 .toggle-row { display:none; flex-wrap:wrap; gap:6px 14px; font-size:11px; max-width:600px; }
 .toggle-row label { cursor:pointer; display:flex; align-items:center; gap:4px; white-space:nowrap; }
 .toggle-row input { accent-color:#3a3aff; }
@@ -191,6 +204,9 @@ canvas { display:block; width:100%; height:100%; }
         <input type="checkbox" id="mode-groundtruth">
         <span>Groundtruth mode</span>
       </label>
+      <button id="open-skraafoto" title="Open Skraafoto and copy building address">
+        Open Skraafoto + Copy address
+      </button>
     </div>
     <div class="toggle-row">
       <label><input type="checkbox" id="show-merged"> Merged (Apple)</label>

@@ -14,6 +14,7 @@ import json
 import math
 import os
 import posixpath
+import re
 import shutil
 import subprocess
 import urllib.parse
@@ -4392,6 +4393,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/groundtruth-sample":
             self._handle_groundtruth_sample_get(parsed.query)
             return
+        if parsed.path == "/scan-cache-address":
+            self._handle_scan_cache_address_get(parsed.query)
+            return
 
         if parsed.path == "/":
             self.path = "/viewer.html"
@@ -4432,6 +4436,44 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             return out
         except Exception:
             return {}
+
+    def _scan_cache_address_for_uuid(self, sample_uuid: str) -> str | None:
+        if not SCAN_CACHE_ROOT.exists():
+            return None
+        # UUID must appear in folder name for this scan-cache layout.
+        uuid_pat = re.compile(re.escape(sample_uuid), re.IGNORECASE)
+        for entry in SCAN_CACHE_ROOT.iterdir():
+            if not entry.is_dir():
+                continue
+            if not uuid_pat.search(entry.name):
+                continue
+            data_json = entry / "data.json"
+            if not data_json.exists():
+                continue
+            try:
+                payload = json.loads(data_json.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            address = ((payload or {}).get("homeMetadata") or {}).get("address")
+            if isinstance(address, str) and address.strip():
+                return address
+        return None
+
+    def _handle_scan_cache_address_get(self, query: str) -> None:
+        params = urllib.parse.parse_qs(query)
+        sample_uuid = (params.get("uuid") or [None])[0]
+        if not sample_uuid:
+            self.send_error(HTTPStatus.BAD_REQUEST, "missing uuid")
+            return
+        address = self._scan_cache_address_for_uuid(sample_uuid)
+        body = json.dumps({"uuid": sample_uuid, "address": address}).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _write_groundtruth_unclean_index(self, data: dict[str, dict]) -> None:
         GROUNDTRUTH_UNCLEAN_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -4527,7 +4569,7 @@ class ViewerHandler(SimpleHTTPRequestHandler):
                 uuid = sample_dir.name
                 tier_path = sample_dir / "tier_payload_input.json"
                 raw_path = sample_dir / "raw_roof.json"
-                target_path = HAND_GROUNDTRUTH_ROOT / uuid / "target_roof.json"
+                target_path = sample_dir / "target_roof.json"
                 rows.append(
                     {
                         "uuid": uuid,
