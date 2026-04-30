@@ -14,6 +14,7 @@ import json
 import math
 import os
 import posixpath
+import shutil
 import subprocess
 import urllib.parse
 import urllib.request
@@ -29,10 +30,27 @@ from shapely.ops import split as shapely_split
 from shapely.ops import unary_union
 from shapely.validation import make_valid
 
-from reconcile.extract3d.builder import extract_building
-from reconcile.roof_algorithms_py import run_roof_algorithms
-from reconcile.roof_algorithms_py.math_utils import plane_normal, plane_y_at
-from reconcile_v2.graph_builder import build_topology_graph
+try:
+    from reconcile.extract3d.builder import extract_building
+    from reconcile.roof_algorithms_py import run_roof_algorithms
+    from reconcile.roof_algorithms_py.math_utils import plane_normal, plane_y_at
+    from reconcile_v2.graph_builder import build_topology_graph
+except Exception:
+    # Some local checkouts only ship static viewer artifacts and omit
+    # reconcile/reconcile_v2 runtime modules. Keep the server bootable so
+    # endpoints backed by precomputed JSON files still work.
+    extract_building = None
+    run_roof_algorithms = None
+    build_topology_graph = None
+
+    def plane_normal(*_args, **_kwargs):
+        return None
+
+    def plane_y_at(x, z, plane):
+        a, b, c, d = plane
+        if abs(b) < 1e-6:
+            return 0.0
+        return -(a * x + c * z + d) / b
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("VIEWER_PORT", "8080"))
@@ -49,6 +67,10 @@ ROOF_PROPOSAL_SPLITS_PATH = (
 )
 PIPELINE_ROOT = ROOT_DIR.parent / "pipeline-outputs"
 SCAN_CACHE_ROOT = ROOT_DIR.parent / ".scan-cache"
+PREPARED_SAMPLES_TIER_ROOT = REPO_ROOT / "model" / "prepared-samples-tier"
+HAND_GROUNDTRUTH_ROOT = REPO_ROOT / "hand_groundtruth"
+GROUNDTRUTH_ARTIFACTS_ROOT = REPO_ROOT / "artifacts_folder"
+GROUNDTRUTH_UNCLEAN_INDEX_PATH = REPO_ROOT / ".context" / "groundtruth_unclean_samples.json"
 ONTOLOGY_CACHE: dict[str, dict] = {}
 V3_RESULTS_PATH = ROOT_DIR / "reconcile_v3_results.json"
 V3_CACHE: dict[str, dict] = {}
@@ -4218,6 +4240,15 @@ def _build_ontology_part_payloads(
 
 
 def _build_ontology_cache_entry(uuid: str) -> dict[str, Any]:
+    if (
+        extract_building is None
+        or run_roof_algorithms is None
+        or build_topology_graph is None
+    ):
+        raise RuntimeError(
+            "Ontology endpoints are unavailable in this checkout: "
+            "missing reconcile/reconcile_v2 runtime modules."
+        )
     merged_path = PIPELINE_ROOT / uuid / "merged.json"
     if not merged_path.exists():
         raise FileNotFoundError(f"No merged.json for {uuid}")
@@ -4355,6 +4386,12 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/building-merged":
             self._handle_building_merged(parsed.query)
             return
+        if parsed.path == "/groundtruth-samples-index":
+            self._handle_groundtruth_samples_index()
+            return
+        if parsed.path == "/groundtruth-sample":
+            self._handle_groundtruth_sample_get(parsed.query)
+            return
 
         if parsed.path == "/":
             self.path = "/viewer.html"
@@ -4371,7 +4408,263 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/v3-roof-proposal-split":
             self._handle_roof_proposal_split_post()
             return
+        if parsed.path == "/groundtruth-sample-save":
+            self._handle_groundtruth_sample_save_post()
+            return
+        if parsed.path == "/groundtruth-sample-mark-unclean":
+            self._handle_groundtruth_mark_unclean_post()
+            return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+
+    def _read_groundtruth_unclean_index(self) -> dict[str, dict]:
+        if not GROUNDTRUTH_UNCLEAN_INDEX_PATH.exists():
+            return {}
+        try:
+            with open(GROUNDTRUTH_UNCLEAN_INDEX_PATH) as handle:
+                data = json.load(handle)
+            if not isinstance(data, dict):
+                return {}
+            out: dict[str, dict] = {}
+            for uuid, entry in data.items():
+                if not isinstance(uuid, str):
+                    continue
+                out[uuid] = entry if isinstance(entry, dict) else {}
+            return out
+        except Exception:
+            return {}
+
+    def _write_groundtruth_unclean_index(self, data: dict[str, dict]) -> None:
+        GROUNDTRUTH_UNCLEAN_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = GROUNDTRUTH_UNCLEAN_INDEX_PATH.with_suffix(".tmp")
+        with open(tmp, "w") as handle:
+            json.dump(data, handle, indent=2, sort_keys=True)
+        tmp.replace(GROUNDTRUTH_UNCLEAN_INDEX_PATH)
+
+    def _tier_vec_to_arr(self, vec: dict | list | tuple | None) -> list[float] | None:
+        if isinstance(vec, dict):
+            if {"x", "y", "z"} <= set(vec.keys()):
+                return [float(vec["x"]), float(vec["y"]), float(vec["z"])]
+            return None
+        if isinstance(vec, (list, tuple)) and len(vec) >= 3:
+            return [float(vec[0]), float(vec[1]), float(vec[2])]
+        return None
+
+    def _tier_corners_to_arr(self, corners: list | None) -> list[list[float]]:
+        out: list[list[float]] = []
+        for point in corners or []:
+            parsed = self._tier_vec_to_arr(point)
+            if parsed is not None:
+                out.append(parsed)
+        return out
+
+    def _build_groundtruth_viewer_building(
+        self, sample_uuid: str, tier_payload: dict, raw_roof: dict, target_roof: dict | None
+    ) -> dict:
+        rooms_out = []
+        for room_idx, room in enumerate(tier_payload.get("rooms") or []):
+            floor = ((room.get("floor") or {}).get("corners")) if isinstance(room, dict) else []
+            walls = room.get("walls") if isinstance(room, dict) else []
+            doors = room.get("doors") if isinstance(room, dict) else []
+            windows = room.get("windows") if isinstance(room, dict) else []
+            walls_out = []
+            for wall_idx, wall in enumerate(walls or []):
+                corners = self._tier_corners_to_arr((wall or {}).get("corners"))
+                ext = self._tier_corners_to_arr((wall or {}).get("extension_strip"))
+                walls_out.append(
+                    {
+                        "id": f"room-{room_idx}-wall-{wall_idx}",
+                        "corners": corners,
+                        "extension_strip": ext,
+                        "source": "tier_payload",
+                        "lineage": [],
+                    }
+                )
+            doors_out = [{"id": f"room-{room_idx}-door-{i}", "corners": self._tier_corners_to_arr((d or {}).get("corners")), "source": "tier_payload", "lineage": []} for i, d in enumerate(doors or [])]
+            windows_out = [{"id": f"room-{room_idx}-window-{i}", "corners": self._tier_corners_to_arr((w or {}).get("corners")), "source": "tier_payload", "lineage": []} for i, w in enumerate(windows or [])]
+            rooms_out.append(
+                {
+                    "story": int((room or {}).get("story", 0)),
+                    "walls_computed": walls_out,
+                    "walls_merged": [],
+                    "doors": doors_out,
+                    "windows": windows_out,
+                    "floor_polygon": self._tier_corners_to_arr(floor),
+                    "raw_ceiling_planes": [],
+                    "raw_ceiling_source": "raw_ceiling_planes",
+                }
+            )
+
+        for plane in raw_roof.get("planes") or []:
+            room_index = int(plane.get("room_index", -1))
+            if room_index < 0 or room_index >= len(rooms_out):
+                continue
+            rooms_out[room_index]["raw_ceiling_planes"].append(
+                {"corners": self._tier_corners_to_arr(plane.get("corners"))}
+            )
+
+        return {
+            "uuid": sample_uuid,
+            "address": tier_payload.get("address") or sample_uuid,
+            "classification": "UNKNOWN",
+            "stories_found": int((tier_payload.get("classification") or {}).get("n_stories", 1)),
+            "rooms": rooms_out,
+            "gap_walls": [],
+            "gap_closures": [],
+            "cross_floor_gaps": [],
+            "stitch_walls": [],
+            "exterior_gap_indicators": [],
+            "roof_surfaces": {},
+            "groundtruth_target_roof": target_roof or {},
+        }
+
+    def _handle_groundtruth_samples_index(self) -> None:
+        unclean = self._read_groundtruth_unclean_index()
+        rows: list[dict] = []
+        if PREPARED_SAMPLES_TIER_ROOT.exists():
+            for sample_dir in sorted(PREPARED_SAMPLES_TIER_ROOT.iterdir()):
+                if not sample_dir.is_dir():
+                    continue
+                uuid = sample_dir.name
+                tier_path = sample_dir / "tier_payload_input.json"
+                raw_path = sample_dir / "raw_roof.json"
+                target_path = HAND_GROUNDTRUTH_ROOT / uuid / "target_roof.json"
+                rows.append(
+                    {
+                        "uuid": uuid,
+                        "has_tier_payload": tier_path.exists(),
+                        "has_raw_roof": raw_path.exists(),
+                        "has_target_roof": target_path.exists(),
+                        "is_unclean": uuid in unclean,
+                    }
+                )
+        body = json.dumps({"samples": rows}).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_groundtruth_sample_get(self, query: str) -> None:
+        params = urllib.parse.parse_qs(query)
+        sample_uuid = (params.get("uuid") or [None])[0]
+        if not sample_uuid:
+            self.send_error(HTTPStatus.BAD_REQUEST, "missing uuid")
+            return
+        sample_dir = PREPARED_SAMPLES_TIER_ROOT / sample_uuid
+        tier_path = sample_dir / "tier_payload_input.json"
+        raw_path = sample_dir / "raw_roof.json"
+        if not tier_path.exists() or not raw_path.exists():
+            self.send_error(HTTPStatus.NOT_FOUND, f"sample missing files for {sample_uuid}")
+            return
+        try:
+            tier_payload = json.loads(tier_path.read_text())
+            raw_roof = json.loads(raw_path.read_text())
+        except Exception as exc:
+            self.send_error(HTTPStatus.BAD_REQUEST, f"failed to parse sample JSON: {exc}")
+            return
+        target_path = HAND_GROUNDTRUTH_ROOT / sample_uuid / "target_roof.json"
+        target_roof = None
+        if target_path.exists():
+            try:
+                target_roof = json.loads(target_path.read_text())
+            except Exception:
+                target_roof = None
+        viewer_building = self._build_groundtruth_viewer_building(
+            sample_uuid, tier_payload, raw_roof, target_roof
+        )
+        body = json.dumps(
+            {
+                "sample_uuid": sample_uuid,
+                "viewer_building": viewer_building,
+                "raw_roof": raw_roof,
+                "target_roof": target_roof,
+                "is_unclean": sample_uuid in self._read_groundtruth_unclean_index(),
+            }
+        ).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_groundtruth_sample_save_post(self) -> None:
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length <= 0:
+            self.send_error(HTTPStatus.BAD_REQUEST, "missing request body")
+            return
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        except Exception as exc:
+            self.send_error(HTTPStatus.BAD_REQUEST, f"invalid json: {exc}")
+            return
+        sample_uuid = payload.get("sample_uuid")
+        target_roof = payload.get("target_roof")
+        if not isinstance(sample_uuid, str) or not sample_uuid:
+            self.send_error(HTTPStatus.BAD_REQUEST, "sample_uuid required")
+            return
+        if not isinstance(target_roof, dict):
+            self.send_error(HTTPStatus.BAD_REQUEST, "target_roof object required")
+            return
+        if sample_uuid in self._read_groundtruth_unclean_index():
+            self.send_error(HTTPStatus.CONFLICT, "sample is marked not clean")
+            return
+        target_dir = HAND_GROUNDTRUTH_ROOT / sample_uuid
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = target_dir / "target_roof.json"
+        tmp = target_path.with_suffix(".tmp")
+        with open(tmp, "w") as handle:
+            json.dump(target_roof, handle, indent=2, sort_keys=False)
+        tmp.replace(target_path)
+        body = json.dumps({"ok": True, "target_path": str(target_path)}).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_groundtruth_mark_unclean_post(self) -> None:
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length <= 0:
+            self.send_error(HTTPStatus.BAD_REQUEST, "missing request body")
+            return
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        except Exception as exc:
+            self.send_error(HTTPStatus.BAD_REQUEST, f"invalid json: {exc}")
+            return
+        sample_uuid = payload.get("sample_uuid")
+        if not isinstance(sample_uuid, str) or not sample_uuid:
+            self.send_error(HTTPStatus.BAD_REQUEST, "sample_uuid required")
+            return
+        sample_dir = PREPARED_SAMPLES_TIER_ROOT / sample_uuid
+        if not sample_dir.exists():
+            self.send_error(HTTPStatus.NOT_FOUND, f"sample not found: {sample_uuid}")
+            return
+        dst_dir = GROUNDTRUTH_ARTIFACTS_ROOT / sample_uuid
+        if not dst_dir.exists():
+            dst_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(sample_dir, dst_dir)
+        unclean = self._read_groundtruth_unclean_index()
+        unclean[sample_uuid] = {
+            "marked_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "artifact_path": str(dst_dir),
+        }
+        self._write_groundtruth_unclean_index(unclean)
+        target_path = HAND_GROUNDTRUTH_ROOT / sample_uuid / "target_roof.json"
+        if target_path.exists():
+            target_path.unlink()
+        body = json.dumps({"ok": True, "artifact_path": str(dst_dir)}).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _handle_ortofoto(self, query: str):
         params = urllib.parse.parse_qs(query)

@@ -35,6 +35,8 @@ body { background:#111; color:#ddd; font-family:-apple-system,BlinkMacSystemFont
 .tag-YELLOW { background:#3a3a1a; color:#cc4; }
 .tag-RED { background:#3a1a1a; color:#c44; }
 .tag-UNKNOWN { background:#2a2a2a; color:#888; }
+.tag-GT { background:#1d4ed8; color:#dbeafe; }
+.tag-UNCLEAN { background:#7c2d12; color:#ffedd5; }
 .stories-badge { color:#888; }
 .stories-badge.multi { color:#4ecdc4; }
 
@@ -136,6 +138,31 @@ canvas { display:block; width:100%; height:100%; }
 #queue-bar button.primary:hover { background:#22c55e; }
 #queue-bar .counter { color:#aaa; font-variant-numeric:tabular-nums; }
 #queue-bar .counter strong { color:#fff; }
+
+#groundtruth-panel {
+  display:none; position:absolute; top:60px; left:10px; z-index:16;
+  background:rgba(13,13,26,0.92); border:1px solid #333; border-radius:8px;
+  padding:10px; font-size:11px; width:340px;
+}
+#groundtruth-panel.visible { display:block; }
+#groundtruth-panel .row { display:flex; gap:6px; align-items:center; margin-bottom:6px; flex-wrap:wrap; }
+#groundtruth-panel button {
+  padding:4px 8px; border:1px solid #444; border-radius:4px; cursor:pointer;
+  color:#ddd; background:#1a1a2e; font-size:11px;
+}
+#groundtruth-panel button.primary { background:#166534; border-color:#22c55e; color:#fff; }
+#groundtruth-panel button.warn { background:#7f1d1d; border-color:#ef4444; color:#fff; }
+#groundtruth-panel .status { color:#9ca3af; min-height:14px; }
+#groundtruth-panel .list {
+  max-height:120px; overflow-y:auto; border:1px solid #2f2f46; border-radius:6px;
+  background:#0f1020; padding:4px; margin-bottom:6px;
+}
+#groundtruth-panel .item {
+  display:flex; justify-content:space-between; align-items:center; gap:6px;
+  padding:3px 4px; border-radius:4px; font-size:10px; color:#cbd5e1;
+}
+#groundtruth-panel .item.active { background:#1d4ed8; color:#dbeafe; }
+#groundtruth-panel .item button { padding:2px 6px; font-size:10px; }
 </style>
 </head>
 <body>
@@ -159,6 +186,10 @@ canvas { display:block; width:100%; height:100%; }
       <label title="Show raw ceiling and roof evidence">
         <input type="checkbox" id="mode-show-raw-roof">
         <span>Show raw roof</span>
+      </label>
+      <label title="Groundtruth roof labeling mode">
+        <input type="checkbox" id="mode-groundtruth">
+        <span>Groundtruth mode</span>
       </label>
     </div>
     <div class="toggle-row">
@@ -210,6 +241,7 @@ canvas { display:block; width:100%; height:100%; }
       <label><input type="checkbox" id="show-ridge-eave"> Ridge/eave scoring</label>
       <label><input type="checkbox" id="show-ortho"> Ortho map</label>
       <label><input type="checkbox" id="show-model-map"> Model map</label>
+      <label style="border-left:1px solid #444;padding-left:8px"><input type="checkbox" id="show-groundtruth-target"> Groundtruth target roof</label>
     </div>
     <div id="legend-box"></div>
   </div>
@@ -250,6 +282,33 @@ canvas { display:block; width:100%; height:100%; }
     </div>
     <div class="status-line" id="proposal-status"></div>
     <div class="status-line" style="color:#555;">Keys: A accept, R reject, S skip, X split, N next unlabeled, Esc cancel</div>
+  </div>
+  <div id="groundtruth-panel">
+    <div class="row"><strong>Groundtruth labeling</strong></div>
+    <div class="row">
+      <span id="gt-step-label">Step 1</span>
+      <span id="gt-picked-count">0 points</span>
+      <span id="gt-add-mode-state">Add mode: OFF</span>
+    </div>
+    <div class="row">
+      <button id="gt-toggle-add-mode">Toggle add mode (N)</button>
+      <button id="gt-redo-step">Redo step</button>
+      <button id="gt-clear-step">Clear step</button>
+      <button id="gt-commit-step" class="primary">Commit step</button>
+    </div>
+    <div class="row"><strong>Current step points</strong></div>
+    <div class="list" id="gt-points-list"></div>
+    <div class="row"><strong>Committed planes</strong></div>
+    <div class="list" id="gt-planes-list"></div>
+    <div class="row">
+      <button id="gt-replace-plane">Replace selected plane</button>
+      <button id="gt-delete-plane" class="warn">Delete selected plane</button>
+    </div>
+    <div class="row">
+      <button id="gt-save-target" class="primary">Save target_roof</button>
+      <button id="gt-mark-unclean" class="warn">Mark not clean</button>
+    </div>
+    <div class="status" id="gt-status">Groundtruth mode off</div>
   </div>
   <canvas id="c"></canvas>
 </div>
