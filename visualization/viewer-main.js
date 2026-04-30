@@ -1222,6 +1222,12 @@ document.addEventListener('keydown', (event) => {
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   const key = event.key.toLowerCase();
+  if (groundtruthModeEnabled && key === 'n') {
+    event.preventDefault();
+    groundtruthAddModeEnabled = !groundtruthAddModeEnabled;
+    updateGroundtruthPanelStatus(groundtruthAddModeEnabled ? 'Add mode enabled' : 'Add mode disabled');
+    return;
+  }
   if (key === 'escape' && splitModeState) {
     event.preventDefault();
     exitSplitMode('Split cancelled.');
@@ -1321,6 +1327,7 @@ let groups = {
   candidateFaces: new THREE.Group(),
   reconstruction: new THREE.Group(),
   ridgeEave: new THREE.Group(),
+  groundtruthTarget: new THREE.Group(),
   selection: new THREE.Group(),
 };
 scene.add(groups.merged);
@@ -1357,6 +1364,7 @@ scene.add(groups.gableExtension);
 scene.add(groups.candidateFaces);
 scene.add(groups.reconstruction);
 scene.add(groups.ridgeEave);
+scene.add(groups.groundtruthTarget);
 scene.add(groups.selection);
 groups.overlaps.visible = false;
 groups.fullModel.visible = false;
@@ -1385,6 +1393,7 @@ groups.gableExtension.visible = false;
 groups.candidateFaces.visible = false;
 groups.reconstruction.visible = false;
 groups.ridgeEave.visible = false;
+groups.groundtruthTarget.visible = false;
 groups.selection.visible = true;
 
 let pipelineStepIndex = 0;
@@ -2610,10 +2619,29 @@ function getOrthoMap() {
 function loadBuilding(index, { resetPipeline = true } = {}) {
   currentBuilding = index;
   elementMeshByUid.clear();
-  [groups.merged, groups.computed, groups.doors, groups.windows, groups.floors, groups.gaps, groups.crossStory, groups.extensions, groups.overlaps, groups.wallClips, groups.extGaps, groups.ceilings, groups.rawCeilings, groups.rawCeilingsRoles, groups.rawCeilingsReconstructions, groups.rawCeilingPlaneSplits, groups.rawCeilingPlaneSplitCandidates, groups.thermalCeilings, groups.roofClusters, groups.fullModelHeuristicRoof, groups.fullModelOntology, groups.ontologySemantics, groups.ontologyContinuation, groups.ontologyCells, groups.fullModel, groups.v3Model, groups.v3Proposals, groups.gableExtension, groups.selection].forEach(disposeGroup);
+  [groups.merged, groups.computed, groups.doors, groups.windows, groups.floors, groups.gaps, groups.crossStory, groups.extensions, groups.overlaps, groups.wallClips, groups.extGaps, groups.ceilings, groups.rawCeilings, groups.rawCeilingsRoles, groups.rawCeilingsReconstructions, groups.rawCeilingPlaneSplits, groups.rawCeilingPlaneSplitCandidates, groups.thermalCeilings, groups.roofClusters, groups.fullModelHeuristicRoof, groups.fullModelOntology, groups.ontologySemantics, groups.ontologyContinuation, groups.ontologyCells, groups.fullModel, groups.v3Model, groups.v3Proposals, groups.gableExtension, groups.groundtruthTarget, groups.selection].forEach(disposeGroup);
   roofClusterData = [];
 
   const bldg = DATA[index];
+  if (groundtruthModeEnabled) {
+    const draft = groundtruthDraftPlanesByUuid.get(bldg.uuid) || (bldg.groundtruth_target_roof?.planes || []);
+    groundtruthDraftPlanesByUuid.set(bldg.uuid, draft);
+    groundtruthSelectedPlaneIndex = -1;
+    groundtruthReplacePlaneIndex = -1;
+    groundtruthStepPoints = [];
+    groundtruthAddModeEnabled = false;
+    rebuildGroundtruthCornerCandidates(bldg);
+    renderGroundtruthPointList();
+    renderGroundtruthPlaneList();
+    renderGroundtruthDraftSelection();
+    updateGroundtruthPanelStatus(`Loaded ${draft.length} draft/target planes`);
+    document.getElementById('groundtruth-panel')?.classList.add('visible');
+    const gtToggle = document.getElementById('show-groundtruth-target');
+    if (gtToggle) {
+      gtToggle.disabled = !(bldg.groundtruth_target_roof?.planes || []).length;
+      if (gtToggle.disabled) gtToggle.checked = false;
+    }
+  }
   fullModelEnhancementByUuid[bldg.uuid] = null;
   groups.fullModelHeuristicRoof.visible = groups.fullModel.visible;
   groups.fullModelOntology.visible = groups.fullModel.visible;
@@ -2856,6 +2884,7 @@ function loadBuilding(index, { resetPipeline = true } = {}) {
 
   const pyResult = bldg.roof_surfaces ? bldg : pyRoofByUuid[bldg.uuid];
   renderAncillaryBuildingLayers(bldg, pyResult);
+  renderGroundtruthTargetRoof(bldg);
 
   // Thermal ceiling surfaces over detected gaps.
   // Skip cross_story gap ceilings when the roof pipeline produced thermal
@@ -3546,6 +3575,16 @@ const RAW_INPUT_OVERLAY = ['merged'];
 const RAW_ROOF_OVERLAY = ['rawCeilings', 'ceilings', 'roofClusters'];
 let rawInputEnabled = false;
 let rawRoofEnabled = false;
+let groundtruthModeEnabled = false;
+let groundtruthSamplesMetaByUuid = new Map();
+let groundtruthDraftPlanesByUuid = new Map();
+let groundtruthStepPoints = [];
+let groundtruthAddModeEnabled = false;
+let groundtruthCornerCandidates = [];
+let groundtruthSelectedPlaneIndex = -1;
+let groundtruthReplacePlaneIndex = -1;
+const GROUNDTRUTH_CORNER_SNAP_M = 0.35;
+let groundtruthDraggedPointIndex = -1;
 
 function applyViewerVisibilityState() {
   const activeLayers = new Set(BASE_RECONCILED_NO_ROOF);
@@ -3561,6 +3600,7 @@ function applyViewerVisibilityState() {
 function bindModeToggles() {
   const rawInputCtl = document.getElementById('mode-show-raw-input');
   const rawRoofCtl = document.getElementById('mode-show-raw-roof');
+  const groundtruthCtl = document.getElementById('mode-groundtruth');
   if (rawInputCtl) {
     rawInputCtl.checked = rawInputEnabled;
     rawInputCtl.addEventListener('change', (event) => {
@@ -3573,6 +3613,25 @@ function bindModeToggles() {
     rawRoofCtl.addEventListener('change', (event) => {
       rawRoofEnabled = !!event.target?.checked;
       applyViewerVisibilityState();
+    });
+  }
+  if (groundtruthCtl) {
+    groundtruthCtl.checked = groundtruthModeEnabled;
+    groundtruthCtl.addEventListener('change', (event) => {
+      groundtruthModeEnabled = !!event.target?.checked;
+      document.getElementById('groundtruth-panel')?.classList.toggle('visible', groundtruthModeEnabled);
+      if (!groundtruthModeEnabled) {
+        groundtruthStepPoints = [];
+        groundtruthAddModeEnabled = false;
+        groundtruthSelectedPlaneIndex = -1;
+        groundtruthReplacePlaneIndex = -1;
+        renderGroundtruthDraftSelection();
+        renderGroundtruthPointList();
+        renderGroundtruthPlaneList();
+      }
+      reloadDatasetForMode().catch((err) => {
+        document.getElementById('building-info').textContent = `Failed to switch mode: ${err}`;
+      });
     });
   }
 }
@@ -3684,6 +3743,393 @@ document.getElementById('raw-split-version-mode')?.addEventListener('change', ()
   renderLegend();
 });
 
+function updateGroundtruthPanelStatus(message = '') {
+  const label = document.getElementById('gt-step-label');
+  const count = document.getElementById('gt-picked-count');
+  const mode = document.getElementById('gt-add-mode-state');
+  const status = document.getElementById('gt-status');
+  if (label) label.textContent = `Step ${groundtruthStepPoints.length > 0 ? 'active' : '1'}`;
+  if (count) count.textContent = `${groundtruthStepPoints.length} points`;
+  if (mode) mode.textContent = `Add mode: ${groundtruthAddModeEnabled ? 'ON' : 'OFF'}`;
+  if (status && message) status.textContent = message;
+}
+
+function getGroundtruthDraftPlanes(buildingUuid) {
+  return groundtruthDraftPlanesByUuid.get(buildingUuid) || [];
+}
+
+function setGroundtruthDraftPlanes(buildingUuid, planes) {
+  groundtruthDraftPlanesByUuid.set(buildingUuid, planes);
+  const bldg = DATA[currentBuilding];
+  if (bldg?.uuid === buildingUuid) {
+    bldg.groundtruth_target_roof = {
+      building_uuid: buildingUuid,
+      extraction_mode: 'hand_groundtruth.viewer',
+      plane_count: planes.length,
+      planes,
+    };
+  }
+}
+
+function renderGroundtruthPointList() {
+  const list = document.getElementById('gt-points-list');
+  if (!list) return;
+  list.innerHTML = '';
+  const movePoint = (fromIdx, toIdx) => {
+    if (fromIdx === toIdx) return;
+    if (fromIdx < 0 || toIdx < 0) return;
+    if (fromIdx >= groundtruthStepPoints.length || toIdx >= groundtruthStepPoints.length) return;
+    const [moved] = groundtruthStepPoints.splice(fromIdx, 1);
+    groundtruthStepPoints.splice(toIdx, 0, moved);
+    renderGroundtruthDraftSelection();
+    renderGroundtruthPointList();
+    updateGroundtruthPanelStatus('Point order updated');
+  };
+  groundtruthStepPoints.forEach((p, idx) => {
+    const row = document.createElement('div');
+    row.className = 'item';
+    row.draggable = true;
+    row.innerHTML = `<span>#${idx + 1} (${p[0].toFixed(2)}, ${p[1].toFixed(2)}, ${p[2].toFixed(2)})</span>`;
+    row.addEventListener('dragstart', (event) => {
+      groundtruthDraggedPointIndex = idx;
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', String(idx));
+      }
+    });
+    row.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    });
+    row.addEventListener('drop', (event) => {
+      event.preventDefault();
+      let fromIdx = groundtruthDraggedPointIndex;
+      if (event.dataTransfer) {
+        const raw = Number(event.dataTransfer.getData('text/plain'));
+        if (Number.isInteger(raw)) fromIdx = raw;
+      }
+      movePoint(fromIdx, idx);
+      groundtruthDraggedPointIndex = -1;
+    });
+    row.addEventListener('dragend', () => {
+      groundtruthDraggedPointIndex = -1;
+    });
+    const btn = document.createElement('button');
+    btn.textContent = 'Remove';
+    btn.addEventListener('click', () => {
+      groundtruthStepPoints.splice(idx, 1);
+      renderGroundtruthDraftSelection();
+      renderGroundtruthPointList();
+      updateGroundtruthPanelStatus('Point removed');
+    });
+    row.appendChild(btn);
+    list.appendChild(row);
+  });
+}
+
+function renderGroundtruthPlaneList() {
+  const bldg = DATA[currentBuilding];
+  const list = document.getElementById('gt-planes-list');
+  if (!list || !bldg?.uuid) return;
+  list.innerHTML = '';
+  const planes = getGroundtruthDraftPlanes(bldg.uuid);
+  planes.forEach((plane, idx) => {
+    const row = document.createElement('div');
+    row.className = `item${groundtruthSelectedPlaneIndex === idx ? ' active' : ''}`;
+    row.innerHTML = `<span>${plane.id || `plane-${idx + 1}`} (${(plane.corners || []).length} pts)</span>`;
+    row.addEventListener('click', () => {
+      groundtruthSelectedPlaneIndex = idx;
+      renderGroundtruthPlaneList();
+      updateGroundtruthPanelStatus(`Selected plane ${idx + 1}`);
+    });
+    list.appendChild(row);
+  });
+}
+
+function rebuildGroundtruthCornerCandidates(building) {
+  groundtruthCornerCandidates = [];
+  if (!building) return;
+  const unique = new Set();
+  for (const room of (building.rooms || [])) {
+    for (const wall of (room.walls_computed || [])) {
+      for (const c of (wall.corners || [])) {
+        const key = `${Number(c[0]).toFixed(4)}|${Number(c[1]).toFixed(4)}|${Number(c[2]).toFixed(4)}`;
+        if (unique.has(key)) continue;
+        unique.add(key);
+        groundtruthCornerCandidates.push([Number(c[0]), Number(c[1]), Number(c[2])]);
+      }
+    }
+  }
+}
+
+function nearestGroundtruthCorner(point) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const c of groundtruthCornerCandidates) {
+    const d = Math.hypot(c[0] - point.x, c[1] - point.y, c[2] - point.z);
+    if (d < bestDist) {
+      bestDist = d;
+      best = c;
+    }
+  }
+  if (!best || bestDist > GROUNDTRUTH_CORNER_SNAP_M) return null;
+  return best;
+}
+
+function renderGroundtruthDraftSelection() {
+  disposeGroup(groups.selection);
+  if (!groundtruthModeEnabled) return;
+  const DRAFT_FILL_COLOR = 0xf59e0b;
+  const DRAFT_EDGE_COLOR = 0xfbbf24;
+  const points = groundtruthStepPoints.map((p) => [p[0], p[1], p[2]]);
+  const makePointLabelSprite = (text) => {
+    const size = 64;
+    const canvasEl = document.createElement('canvas');
+    canvasEl.width = size;
+    canvasEl.height = size;
+    const ctx = canvasEl.getContext('2d');
+    if (!ctx) return null;
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(251, 191, 36, 0.95)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = '#fef3c7';
+    ctx.font = 'bold 30px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(text), size / 2, size / 2 + 1);
+    const texture = new THREE.CanvasTexture(canvasEl);
+    texture.needsUpdate = true;
+    const material = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: true,
+      depthWrite: false,
+    });
+    const sprite = new THREE.Sprite(material);
+    sprite.scale.set(0.28, 0.28, 1);
+    return sprite;
+  };
+
+  if (points.length >= 3) {
+    const draftMesh = createPolygonMesh(points, DRAFT_FILL_COLOR, 0.28);
+    if (draftMesh) {
+      draftMesh.renderOrder = 70;
+      draftMesh.material.depthWrite = false;
+      draftMesh.material.depthTest = true;
+      groups.selection.add(draftMesh);
+    }
+  }
+
+  if (points.length >= 2) {
+    // Show polygon boundary from selected points. For >=3, close the loop.
+    const loopPts = points.length >= 3 ? [...points, points[0]] : points;
+    groups.selection.add(createPolyline3(loopPts, DRAFT_EDGE_COLOR, 1.0));
+  }
+
+  for (const [idx, p] of groundtruthStepPoints.entries()) {
+    const marker = new THREE.Mesh(
+      new THREE.SphereGeometry(0.08, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0x14b8a6 }),
+    );
+    marker.position.set(p[0], p[1], p[2]);
+    marker.renderOrder = 71;
+    groups.selection.add(marker);
+    const label = makePointLabelSprite(idx + 1);
+    if (label) {
+      label.position.set(p[0], p[1] + 0.16, p[2]);
+      label.renderOrder = 72;
+      groups.selection.add(label);
+    }
+  }
+}
+
+function renderGroundtruthTargetRoof(building) {
+  disposeGroup(groups.groundtruthTarget);
+  const enabled = !!document.getElementById('show-groundtruth-target')?.checked;
+  groups.groundtruthTarget.visible = enabled;
+  if (!enabled || !building) return;
+  const targetRoof = building.groundtruth_target_roof || {};
+  for (const [idx, plane] of (targetRoof.planes || []).entries()) {
+    const corners = plane?.corners || [];
+    if (!Array.isArray(corners) || corners.length < 3) continue;
+    const mesh = createPolygonMesh(corners, 0x2563eb, 0.45);
+    if (mesh) {
+      attachLocator(mesh, {
+        buildingUuid: building.uuid,
+        kind: 'groundtruth-target-roof',
+        id: String(plane.id || `gt:${idx}`),
+        roomId: `${plane.story ?? 0}:${plane.room_index ?? 0}`,
+        story: Number(plane.story || 0),
+        source: 'groundtruth-target',
+        corners,
+        lineage: [],
+      });
+      groups.groundtruthTarget.add(mesh);
+    }
+    groups.groundtruthTarget.add(createEdgeLoop(corners, 0x1d4ed8));
+  }
+}
+
+async function saveGroundtruthTargetForCurrentBuilding() {
+  const bldg = DATA[currentBuilding];
+  if (!bldg?.uuid) return;
+  const targetRoof = {
+    building_uuid: bldg.uuid,
+    extraction_mode: 'hand_groundtruth.viewer',
+    plane_count: getGroundtruthDraftPlanes(bldg.uuid).length,
+    planes: getGroundtruthDraftPlanes(bldg.uuid),
+  };
+  const resp = await fetch('/groundtruth-sample-save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sample_uuid: bldg.uuid, target_roof: targetRoof }),
+  });
+  if (!resp.ok) throw new Error(`save failed: ${resp.status}`);
+  bldg.groundtruth_target_roof = targetRoof;
+  const meta = groundtruthSamplesMetaByUuid.get(bldg.uuid) || {};
+  meta.has_target_roof = true;
+  groundtruthSamplesMetaByUuid.set(bldg.uuid, meta);
+  buildSidebar(DATA);
+  renderGroundtruthTargetRoof(bldg);
+  updateGroundtruthPanelStatus('Saved target_roof.json');
+}
+
+async function markCurrentBuildingUnclean() {
+  const bldg = DATA[currentBuilding];
+  if (!bldg?.uuid) return;
+  const resp = await fetch('/groundtruth-sample-mark-unclean', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sample_uuid: bldg.uuid }),
+  });
+  if (!resp.ok) throw new Error(`mark unclean failed: ${resp.status}`);
+  const meta = groundtruthSamplesMetaByUuid.get(bldg.uuid) || {};
+  meta.is_unclean = true;
+  meta.has_target_roof = false;
+  groundtruthSamplesMetaByUuid.set(bldg.uuid, meta);
+  buildSidebar(DATA);
+  updateGroundtruthPanelStatus('Marked not clean and copied to artifacts_folder');
+}
+
+document.getElementById('show-groundtruth-target')?.addEventListener('change', () => {
+  const bldg = DATA[currentBuilding];
+  if (bldg) renderGroundtruthTargetRoof(bldg);
+});
+
+document.getElementById('gt-toggle-add-mode')?.addEventListener('click', () => {
+  groundtruthAddModeEnabled = !groundtruthAddModeEnabled;
+  updateGroundtruthPanelStatus(groundtruthAddModeEnabled ? 'Add mode enabled' : 'Add mode disabled');
+});
+document.getElementById('gt-redo-step')?.addEventListener('click', () => {
+  groundtruthStepPoints = [];
+  renderGroundtruthDraftSelection();
+  renderGroundtruthPointList();
+  updateGroundtruthPanelStatus('Step reset');
+});
+document.getElementById('gt-clear-step')?.addEventListener('click', () => {
+  groundtruthStepPoints = [];
+  renderGroundtruthDraftSelection();
+  renderGroundtruthPointList();
+  updateGroundtruthPanelStatus('Step cleared');
+});
+document.getElementById('gt-commit-step')?.addEventListener('click', () => {
+  const bldg = DATA[currentBuilding];
+  if (!bldg?.uuid || groundtruthStepPoints.length < 3) {
+    updateGroundtruthPanelStatus('Pick at least 3 points to commit a plane');
+    return;
+  }
+  const first = groundtruthStepPoints[0];
+  const room = bldg.rooms.find((r) => (r.walls_computed || []).some((w) => (w.corners || []).some((c) => Math.hypot(c[0] - first[0], c[1] - first[1], c[2] - first[2]) < 0.35)));
+  const plane = {
+    id: `step-${Date.now()}`,
+    room_index: Math.max(0, bldg.rooms.indexOf(room)),
+    story: Number(room?.story || 0),
+    source: 'hand_groundtruth',
+    corners: groundtruthStepPoints.map((p) => [p[0], p[1], p[2]]),
+  };
+  const draft = getGroundtruthDraftPlanes(bldg.uuid).slice();
+  if (groundtruthReplacePlaneIndex >= 0 && groundtruthReplacePlaneIndex < draft.length) {
+    draft.splice(groundtruthReplacePlaneIndex, 1, plane);
+    groundtruthSelectedPlaneIndex = groundtruthReplacePlaneIndex;
+    groundtruthReplacePlaneIndex = -1;
+  } else {
+    draft.push(plane);
+    groundtruthSelectedPlaneIndex = draft.length - 1;
+  }
+  setGroundtruthDraftPlanes(bldg.uuid, draft);
+  const gtToggle = document.getElementById('show-groundtruth-target');
+  if (gtToggle) {
+    gtToggle.disabled = false;
+    gtToggle.checked = true;
+  }
+  groundtruthStepPoints = [];
+  renderGroundtruthDraftSelection();
+  renderGroundtruthPointList();
+  renderGroundtruthPlaneList();
+  renderGroundtruthTargetRoof(bldg);
+  updateGroundtruthPanelStatus(`Committed step. ${draft.length} planes in draft`);
+});
+document.getElementById('gt-replace-plane')?.addEventListener('click', () => {
+  const bldg = DATA[currentBuilding];
+  if (!bldg?.uuid) return;
+  const draft = getGroundtruthDraftPlanes(bldg.uuid).slice();
+  if (groundtruthSelectedPlaneIndex < 0 || groundtruthSelectedPlaneIndex >= draft.length) {
+    updateGroundtruthPanelStatus('Select a committed plane first');
+    return;
+  }
+  const planeToEdit = draft[groundtruthSelectedPlaneIndex];
+  // Uncommit selected plane and move its polygon back into editable step points.
+  draft.splice(groundtruthSelectedPlaneIndex, 1);
+  setGroundtruthDraftPlanes(bldg.uuid, draft);
+  groundtruthStepPoints = (planeToEdit?.corners || []).map((p) => [Number(p[0]), Number(p[1]), Number(p[2])]);
+  groundtruthReplacePlaneIndex = -1;
+  groundtruthSelectedPlaneIndex = -1;
+  const gtToggle = document.getElementById('show-groundtruth-target');
+  if (gtToggle) {
+    gtToggle.disabled = draft.length === 0;
+    if (draft.length === 0) gtToggle.checked = false;
+  }
+  renderGroundtruthDraftSelection();
+  renderGroundtruthPointList();
+  renderGroundtruthPlaneList();
+  renderGroundtruthTargetRoof(bldg);
+  updateGroundtruthPanelStatus('Plane uncommitted: edit points and commit again');
+});
+document.getElementById('gt-delete-plane')?.addEventListener('click', () => {
+  const bldg = DATA[currentBuilding];
+  if (!bldg?.uuid) return;
+  const draft = getGroundtruthDraftPlanes(bldg.uuid).slice();
+  if (groundtruthSelectedPlaneIndex < 0 || groundtruthSelectedPlaneIndex >= draft.length) {
+    updateGroundtruthPanelStatus('Select a committed plane first');
+    return;
+  }
+  draft.splice(groundtruthSelectedPlaneIndex, 1);
+  groundtruthSelectedPlaneIndex = -1;
+  groundtruthReplacePlaneIndex = -1;
+  setGroundtruthDraftPlanes(bldg.uuid, draft);
+  const gtToggle = document.getElementById('show-groundtruth-target');
+  if (gtToggle) {
+    gtToggle.disabled = draft.length === 0;
+    if (draft.length === 0) gtToggle.checked = false;
+  }
+  renderGroundtruthPlaneList();
+  renderGroundtruthTargetRoof(bldg);
+  updateGroundtruthPanelStatus('Committed plane deleted');
+});
+document.getElementById('gt-save-target')?.addEventListener('click', () => {
+  saveGroundtruthTargetForCurrentBuilding().catch((err) => updateGroundtruthPanelStatus(String(err)));
+});
+document.getElementById('gt-mark-unclean')?.addEventListener('click', () => {
+  markCurrentBuildingUnclean().catch((err) => updateGroundtruthPanelStatus(String(err)));
+});
+
 canvas.addEventListener("contextmenu", async (event) => {
   event.preventDefault();
   if (!DATA[currentBuilding]) return;
@@ -3729,6 +4175,26 @@ canvas.addEventListener("click", (event) => {
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
+
+  if (groundtruthModeEnabled) {
+    if (!groundtruthAddModeEnabled) {
+      updateGroundtruthPanelStatus('Press N to enable Add mode');
+      return;
+    }
+    const intersections = raycaster.intersectObjects([groups.computed, groups.merged], true);
+    const hit = intersections.find((it) => it.object?.userData?.elementUid);
+    if (!hit) return;
+    const snapped = nearestGroundtruthCorner(hit.point);
+    if (!snapped) {
+      updateGroundtruthPanelStatus('Click closer to a wall corner');
+      return;
+    }
+    groundtruthStepPoints.push([snapped[0], snapped[1], snapped[2]]);
+    renderGroundtruthDraftSelection();
+    renderGroundtruthPointList();
+    updateGroundtruthPanelStatus('Corner point added');
+    return;
+  }
 
   if (splitModeState) {
     const hits = raycaster.intersectObject(groups.v3Proposals, true);
@@ -4484,138 +4950,114 @@ function maybeLoadCeilingReplacementForCurrentBuilding() {
   });
 }
 
-Promise.all([
-  fetchJsonWithLastModified(`buildings_3d.json?v=${Date.now()}`),
-  fetchJsonWithLastModified(`roof_algorithms_py_results.json?v=${Date.now()}`).catch(() => ({
-    data: {},
-    lastModifiedMs: null,
-  })),
-])
-  .then(([buildingPayload, roofPayload]) => {
-    const buildingsMtime = buildingPayload.lastModifiedMs;
-    const roofMtime = roofPayload.lastModifiedMs;
-    const roofFreshEnough = (
-      roofMtime == null ||
-      buildingsMtime == null ||
-      roofMtime >= buildingsMtime
-    );
-    if (!roofFreshEnough) {
-      console.warn(
-        'Ignoring stale roof_algorithms_py_results.json because it is older than buildings_3d.json',
-        { roofMtime, buildingsMtime },
-      );
-      pyRoofByUuid = {};
-    } else {
-      pyRoofByUuid = (roofPayload.data && typeof roofPayload.data === 'object') ? roofPayload.data : {};
-    }
-    return fetch('/alignment-calibration')
-      .then(r => (r.ok ? r.json() : {}))
-      .catch(() => ({}))
-      .then(calib => {
-        alignmentByUuid = (calib && typeof calib === 'object') ? calib : {};
-        return buildingPayload.data;
-      });
-  })
-  .then(data => {
-    DATA = data;
-    buildingIndexByUuid = new Map();
-    data.forEach((b, i) => {
-      if (b?.uuid) buildingIndexByUuid.set(b.uuid, i);
-    });
+async function ensureGroundtruthSampleLoaded(index) {
+  const item = DATA[index];
+  if (!item || !item.__groundtruth_lazy) return item;
+  const resp = await fetch(`/groundtruth-sample?uuid=${encodeURIComponent(item.uuid)}`, { cache: 'no-store' });
+  if (!resp.ok) throw new Error(`failed to load sample ${item.uuid}`);
+  const payload = await resp.json();
+  const loaded = payload.viewer_building || item;
+  loaded.__groundtruth_lazy = false;
+  if (payload.target_roof) loaded.groundtruth_target_roof = payload.target_roof;
+  DATA[index] = loaded;
+  return loaded;
+}
 
-    // Sort by address
-    const indices = data.map((b, i) => i);
-    indices.sort((a, b) => (data[a].address || '').localeCompare(data[b].address || ''));
-
-    const list = document.getElementById('building-list');
-    for (const i of indices) {
-      const b = data[i];
-      const el = document.createElement('div');
-      el.className = 'bldg-item';
-      const addr = b.address || b.uuid.slice(0, 12);
-      const computedCount = b.rooms.reduce((s, r) => s + r.walls_computed.length, 0);
-      const doorCount = b.rooms.reduce((s, r) => s + (r.doors || []).length, 0);
-      const windowCount = b.rooms.reduce((s, r) => s + (r.windows || []).length, 0);
-      const cls = b.classification || 'UNKNOWN';
-      const storiesClass = b.stories_found > 1 ? 'multi' : '';
-      const gapCount = (b.cross_floor_gaps || []).length;
-      const gapBadge = gapCount > 0 ? `<span style="color:#f84">${gapCount}gaps</span>` : '';
-      const extGapCount = (b.exterior_gap_indicators || []).length;
-      const extGapBadge = extGapCount > 0 ? `<span style="color:#f4f">${extGapCount}eg</span>` : '';
-      el.innerHTML =
-        `<div class="bldg-addr">${addr}</div>` +
-        `<div class="bldg-meta">` +
-          `<span class="tag tag-${cls}">${cls}</span>` +
-          `<span class="stories-badge ${storiesClass}">${b.stories_found}F</span>` +
-          `<span>${b.rooms.length}r</span>` +
-          `<span>${computedCount}w</span>` +
-          `<span style="color:#c73">${doorCount}d</span>` +
-          `<span style="color:#3ad">${windowCount}w</span>` +
-          gapBadge +
-          extGapBadge +
-        `</div>`;
-      el.dataset.search = `${addr} ${b.uuid} ${cls}`.toLowerCase();
-      el.dataset.index = i;
-      el.addEventListener('click', () => {
-        document.querySelectorAll('.bldg-item').forEach(x => x.classList.remove('active'));
-        el.classList.add('active');
+function buildSidebar(data) {
+  buildingIndexByUuid = new Map();
+  data.forEach((b, i) => { if (b?.uuid) buildingIndexByUuid.set(b.uuid, i); });
+  const indices = data.map((_, i) => i);
+  indices.sort((a, b) => (data[a].address || '').localeCompare(data[b].address || ''));
+  const list = document.getElementById('building-list');
+  list.innerHTML = '';
+  for (const i of indices) {
+    const b = data[i];
+    const rooms = b.rooms || [];
+    const addr = b.address || (b.uuid || '').slice(0, 12);
+    const computedCount = rooms.reduce((s, r) => s + ((r.walls_computed || []).length), 0);
+    const doorCount = rooms.reduce((s, r) => s + ((r.doors || []).length), 0);
+    const windowCount = rooms.reduce((s, r) => s + ((r.windows || []).length), 0);
+    const cls = b.classification || 'UNKNOWN';
+    const storiesFound = Number(b.stories_found || 1);
+    const storiesClass = storiesFound > 1 ? 'multi' : '';
+    const gtMeta = groundtruthSamplesMetaByUuid.get(b.uuid);
+    const gtBadge = gtMeta?.has_target_roof ? `<span class="tag tag-GT">GT</span>` : '';
+    const uncleanBadge = gtMeta?.is_unclean ? `<span class="tag tag-UNCLEAN">UNCLEAN</span>` : '';
+    const el = document.createElement('div');
+    el.className = 'bldg-item';
+    el.innerHTML =
+      `<div class="bldg-addr">${addr}</div>` +
+      `<div class="bldg-meta">` +
+      `<span class="tag tag-${cls}">${cls}</span>` +
+      `${gtBadge}${uncleanBadge}` +
+      `<span class="stories-badge ${storiesClass}">${storiesFound}F</span>` +
+      `<span>${rooms.length}r</span><span>${computedCount}w</span>` +
+      `<span style="color:#c73">${doorCount}d</span><span style="color:#3ad">${windowCount}w</span>` +
+      `</div>`;
+    el.dataset.search = `${addr} ${b.uuid} ${cls} ${gtMeta?.has_target_roof ? 'gt' : ''}`.toLowerCase();
+    el.dataset.index = i;
+    el.addEventListener('click', async () => {
+      document.querySelectorAll('.bldg-item').forEach(x => x.classList.remove('active'));
+      el.classList.add('active');
+      try {
+        if (groundtruthModeEnabled) await ensureGroundtruthSampleLoaded(i);
         requestAnimationFrame(() => loadBuilding(i));
-      });
-      list.appendChild(el);
-    }
+      } catch (err) {
+        document.getElementById('building-info').textContent = `Failed loading sample: ${err}`;
+      }
+    });
+    list.appendChild(el);
+  }
+  document.getElementById('sidebar-stats').textContent = `${data.length} buildings`;
+  return indices;
+}
 
-    document.getElementById('sidebar-stats').textContent = `${data.length} buildings`;
-    resizeRenderer();
-    if (pendingElementUid) {
-      const parsed = parseElementUid(pendingElementUid);
-      if (parsed && buildingIndexByUuid.has(parsed.buildingUuid)) {
-        const idx = buildingIndexByUuid.get(parsed.buildingUuid);
-        const b = data[idx];
-        applyAlignmentStateToControls(alignmentByUuid[b.uuid] || {});
-        try {
-          loadBuilding(idx);
-        } catch (err) {
-          console.error('Initial building load failed', b?.uuid, err);
-          document.getElementById('building-info').textContent = `Initial building load failed for ${b?.uuid || 'unknown building'}`;
-        }
-        jumpToElementUid(pendingElementUid, { focus: true, updateHash: false });
-      } else if (indices.length > 0) {
-        const b = data[indices[0]];
-        applyAlignmentStateToControls(alignmentByUuid[b.uuid] || {});
-        try {
-          loadBuilding(indices[0]);
-        } catch (err) {
-          console.error('Initial building load failed', b?.uuid, err);
-          document.getElementById('building-info').textContent = `Initial building load failed for ${b?.uuid || 'unknown building'}`;
-        }
-      }
-      pendingElementUid = null;
-      pendingBuildingUuid = null;
-    } else if (pendingBuildingUuid && buildingIndexByUuid.has(pendingBuildingUuid)) {
-      const idx = buildingIndexByUuid.get(pendingBuildingUuid);
-      const b = data[idx];
-      applyAlignmentStateToControls(alignmentByUuid[b.uuid] || {});
-      try {
-        loadBuilding(idx);
-      } catch (err) {
-        console.error('Initial building load failed', b?.uuid, err);
-        document.getElementById('building-info').textContent = `Initial building load failed for ${b?.uuid || 'unknown building'}`;
-      }
-      pendingBuildingUuid = null;
-    } else if (indices.length > 0) {
-      const b = data[indices[0]];
-      applyAlignmentStateToControls(alignmentByUuid[b.uuid] || {});
-      try {
-        loadBuilding(indices[0]);
-      } catch (err) {
-        console.error('Initial building load failed', b?.uuid, err);
-        document.getElementById('building-info').textContent = `Initial building load failed for ${b?.uuid || 'unknown building'}`;
-      }
-    }
-    animate();
-  })
-  .catch(err => {
-    console.error('Failed to load buildings_3d.json', err);
+async function loadDefaultDataset() {
+  const [buildingPayload, roofPayload] = await Promise.all([
+    fetchJsonWithLastModified(`buildings_3d.json?v=${Date.now()}`),
+    fetchJsonWithLastModified(`roof_algorithms_py_results.json?v=${Date.now()}`).catch(() => ({ data: {}, lastModifiedMs: null })),
+  ]);
+  const buildingsMtime = buildingPayload.lastModifiedMs;
+  const roofMtime = roofPayload.lastModifiedMs;
+  const roofFreshEnough = (roofMtime == null || buildingsMtime == null || roofMtime >= buildingsMtime);
+  pyRoofByUuid = roofFreshEnough && roofPayload.data && typeof roofPayload.data === 'object' ? roofPayload.data : {};
+  const calib = await fetch('/alignment-calibration').then(r => (r.ok ? r.json() : {})).catch(() => ({}));
+  alignmentByUuid = calib && typeof calib === 'object' ? calib : {};
+  DATA = buildingPayload.data;
+}
+
+async function loadGroundtruthDataset() {
+  pyRoofByUuid = {};
+  alignmentByUuid = {};
+  const indexPayload = await fetch('/groundtruth-samples-index', { cache: 'no-store' }).then(r => r.json());
+  const samples = indexPayload?.samples || [];
+  groundtruthSamplesMetaByUuid = new Map(samples.map((s) => [s.uuid, s]));
+  DATA = samples.map((s) => ({
+    uuid: s.uuid,
+    address: s.uuid,
+    classification: 'UNKNOWN',
+    stories_found: 1,
+    rooms: [],
+    __groundtruth_lazy: true,
+  }));
+}
+
+async function reloadDatasetForMode() {
+  if (groundtruthModeEnabled) await loadGroundtruthDataset();
+  else await loadDefaultDataset();
+  const indices = buildSidebar(DATA);
+  resizeRenderer();
+  if (indices.length > 0) {
+    const first = indices[0];
+    if (groundtruthModeEnabled) await ensureGroundtruthSampleLoaded(first);
+    loadBuilding(first);
+  }
+}
+
+reloadDatasetForMode()
+  .then(() => animate())
+  .catch((err) => {
+    console.error('Failed to load dataset', err);
     document.getElementById('sidebar-stats').textContent = 'Failed to load buildings';
-    document.getElementById('building-info').textContent = 'Could not load buildings_3d.json';
+    document.getElementById('building-info').textContent = `Could not load dataset: ${err}`;
   });
